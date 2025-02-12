@@ -831,6 +831,20 @@ class WPF_Public
 	function change_query( $query ) {
 		if ( $form = $this->get_form( sanitize_key( $_GET['wpf'] ) ) ) {
 			$args = $this->parse_query( $_GET, $form );
+
+            // on tax archives, filter down the products list
+            if ( is_tax( get_object_taxonomies( 'product' ) ) ) {
+                if ( ! isset( $args['tax_query'] ) ) {
+                    $args['tax_query'] = [];
+                }
+                $queried_object = get_queried_object();
+                $args['tax_query'][] = [
+                    'taxonomy' => $queried_object->taxonomy,
+                    'field' => 'term_id',
+                    'terms' => $queried_object->term_id
+                ];
+            }
+
 			foreach ( $args as $k => $v ) {
 				// Don't override the var that is empty and has default value #8913
 			    if(empty($v) && !empty($query->get($k))){
