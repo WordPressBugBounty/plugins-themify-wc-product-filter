@@ -83,6 +83,8 @@ class WPF_Public
 
 			add_action( 'pre_get_posts', array( $this, 'change_shop_query' ), 99 );
 			add_filter( 'wc_get_template', array( $this, 'hide_templates' ), 100, 5 );
+            remove_action( 'wp_head', 'rel_canonical' ); 
+            add_action( 'wp_head', array( $this, 'canonical_link' ) );
 		}
 	}
 
@@ -930,4 +932,8 @@ class WPF_Public
 	public function unnullify_template( $template_name ) {
 		unset( $this->nulled_templates[ $template_name ] );
 	}
+
+    function canonical_link( $url ) {
+        echo '<link rel="canonical" href="', WPF_Utils::get_unfiltered_url() ,'" />';
+    }
 }

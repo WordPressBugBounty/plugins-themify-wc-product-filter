@@ -860,16 +860,7 @@ class WPF_Form {
             $clasess[] = 'wpf_form_ajax';
         }
 
-		// clear previous WPF parameters from current page URL
-		$wpf_parameters = array();
-		if ( ! empty( $_GET ) ) {
-			foreach ( $_GET as $key => $value ) {
-				if ( substr( $key, 0, 3 ) === 'wpf' ) {
-					$wpf_parameters[] = $key;
-				}
-			}
-		}
-		$action = remove_query_arg( $wpf_parameters, $action );
+		$action = WPF_Utils::get_unfiltered_url( $action );
         ?>
         <form
 			data-post-id="<?php echo $post_id; ?>"
@@ -1197,7 +1188,7 @@ class WPF_Form {
                             <ul class="<?php if ($link): ?>wpf_links <?php endif; ?><?php if (!$hierarchy): ?>wpf_column_<?php echo $args['display'] ?><?php if ($column): ?> wpf_column_<?php echo $column ?><?php endif; ?><?php else: ?>wpf_hierachy<?php endif; ?><?php if ($color): ?> wpf_color_icons<?php endif; ?><?php if ($hide_text): ?> wpf_hide_text<?php endif; ?>">
                             <?php endif; ?>
                             <?php if (!empty($args['hierachy']) && is_taxonomy_hierarchical( $taxonomy ) ): ?>
-                                <?php $this->category_walker( reset( $cats ), $cats, $type, $args, $value, !empty($data['empty']), $lang); ?>
+                                <?php $this->category_walker( isset( $cats[0] ) ? $cats[0] : reset( $cats ), $cats, $type, $args, $value, !empty($data['empty']), $lang); ?>
                             <?php else: ?>
                                 <?php $this->category_walker($cats, array(), $type, $args, $value, !empty($data['empty']), $lang); ?>
                             <?php endif; ?>

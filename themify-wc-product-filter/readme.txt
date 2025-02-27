@@ -4,7 +4,7 @@ Plugin Name: Themify - WooCommerce Product Filter
 Tags: product-search, woocommerce-product-search, product-filter, woocommerce-product-filter, product-sort
 Requires at least: 5.0
 Tested up to: 6.7.2
-Stable tag: 1.5.3
+Stable tag: 1.5.4
 License: GPL v2
 License URI: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
 
