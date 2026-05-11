@@ -184,7 +184,6 @@ class WPF_Public
 		}
 		if ( is_woocommerce() ) {
 			add_action( 'woocommerce_before_main_content', array( $this, 'result_container' ), 100 );
-			add_action( 'woocommerce_after_main_content', array( $this, 'close_div' ), 1 );
 		}
 	}
 
@@ -220,6 +219,7 @@ class WPF_Public
 		}
 		if ( is_woocommerce() ) {
 			echo '<div data-slug="' . $slug . '" class="wpf-search-container' . $is_infinity . '">';
+            add_action( 'woocommerce_after_main_content', array( $this, 'close_div' ), 1 );
 			if ( !empty( self::$result ) ) {
 				ob_start();
 			}
