@@ -40,6 +40,20 @@ class WPF_Public
 	private $custom_cols;
 
 	/**
+	 * When true, parse_query builds args without registering loop/WC hooks or nullifying templates.
+	 *
+	 * @var bool
+	 */
+	private static $silent_parse_query = false;
+
+	/**
+	 * @param bool $silent
+	 */
+	public static function set_silent_parse_query( $silent = false ) {
+		self::$silent_parse_query = (bool) $silent;
+	}
+
+	/**
 	 * List of templates that are nullified, so they will show no output.
 	 *
 	 * @type array
@@ -69,6 +83,8 @@ class WPF_Public
 		} else {
 			add_action( 'wp_ajax_wpf_autocomplete', array( $this, 'autocomplete' ) );
 			add_action( 'wp_ajax_nopriv_wpf_autocomplete', array( $this, 'autocomplete' ) );
+			add_action( 'wp_ajax_wpf_refresh_facets', array( $this, 'ajax_refresh_facets' ) );
+			add_action( 'wp_ajax_nopriv_wpf_refresh_facets', array( $this, 'ajax_refresh_facets' ) );
 		}
 
 		add_shortcode( 'tf_product_filter', array( $this, 'shortcode' ) );
@@ -77,7 +93,7 @@ class WPF_Public
             add_shortcode( 'searchandfilter', array( $this, 'shortcode' ) );
         }
 
-		if ( ! empty( $_GET['wpf'] ) ) {
+		if ( '' !== self::request_wpf_slug() ) {
 			add_filter( 'woocommerce_shortcode_products_query', array( $this, 'woocommerce_shortcode_products_query' ) );
 			add_filter( 'shortcode_atts_products', array( $this, 'shortcode_atts_products' ) );
 
@@ -104,6 +120,7 @@ class WPF_Public
 			'rtl' => is_rtl(),
 			'includes_url' => trailingslashit( includes_url() ),
 			'load_jquery_ui_widget' => version_compare( $wp_version, '5.6', '<' ),
+			'facetNonce' => wp_create_nonce( 'wpf_refresh_facets' ),
 		);
 		wp_register_style( $this->plugin_name . '-select', $plugin_url . 'css/select2.min.css', false, $this->version, false );
 
@@ -146,38 +163,38 @@ class WPF_Public
 		}
 		$request = array();
 		$this->shortcode_id = $id;
-		if ( ! empty( $_REQUEST['wpf'] ) ) {
-			$option = WPF_Options::get_option( $this->plugin_name, $this->version );
-			$forms = $option->get();
-			if ( !empty( $forms[ $_REQUEST['wpf'] ] ) ) {
-				$this->shortcode_id = $_REQUEST['wpf'];
-				$request = $this->parse_query( $_REQUEST, $forms[ $_REQUEST['wpf'] ], false );
-			}
+		$slug = self::request_wpf_slug();
+		if ( '' !== $slug && ! empty( $forms[ $slug ] ) ) {
+			$this->shortcode_id = $slug;
+			$request = $this->parse_query( $_REQUEST, $forms[ $slug ], false );
 		}
 		$wpf_form = new WPF_Form( $this->plugin_name, $this->version, $id );
 		return $wpf_form->public_themplate( $forms[ $id ], self::$result_page, $request );
 	}
 
 	public function result_page() {
-		if ( ! empty( $_POST['wpf'] ) ) {
+		$slug = self::request_wpf_slug();
+		if ( '' !== $slug ) {
 		    $option = WPF_Options::get_option( $this->plugin_name, $this->version );
 			$forms = $option->get();
 
-			if ( !empty( $forms[ $_REQUEST['wpf'] ] ) ) {
+			if ( ! empty( $forms[ $slug ] ) ) {
 				self::$result_page = WPF_Utils::get_current_page();
-				$data = $forms[ $_REQUEST['wpf'] ]['data'];
+				$data = $forms[ $slug ]['data'];
 				if ( ( !empty( $data['result_type'] ) && $data['result_type'] === 'same_page' ) || self::$result_page == $data['page'] ) {
 					self::load_wc_scripts();
 					add_filter( 'body_class', array( $this, 'body_class' ), 10, 1 );
-					self::$result = $this->get_result( $_REQUEST, $forms[ $_REQUEST['wpf'] ] );
-					if ( is_singular( 'product' ) ) {
-						add_filter( 'wc_get_template', array( $this, 'filter_not_found' ), 30, 5 );
-					} elseif ( is_woocommerce() ) {
-						global $wp_query;
-						$this->post_count = $wp_query->post_count;
-						$wp_query->post_count = 0;
-						add_action( 'woocommerce_after_main_content', array( $this, 'refresh_post_count' ), 1 );
-						add_filter( 'wc_get_template', array( $this, 'filter_not_found' ), 30, 5 );
+					if ( ! ( class_exists( 'Themify_WPF_Plugin_Compat_themifyBuilderPro', false ) && Themify_WPF_Plugin_Compat_themifyBuilderPro::should_render_with_builder_pro() ) ) {
+						self::$result = $this->get_result( $_REQUEST, $forms[ $slug ] );
+						if ( is_singular( 'product' ) ) {
+							add_filter( 'wc_get_template', array( $this, 'filter_not_found' ), 30, 5 );
+						} elseif ( is_woocommerce() ) {
+							global $wp_query;
+							$this->post_count = $wp_query->post_count;
+							$wp_query->post_count = 0;
+							add_action( 'woocommerce_after_main_content', array( $this, 'refresh_post_count' ), 1 );
+							add_filter( 'wc_get_template', array( $this, 'filter_not_found' ), 30, 5 );
+						}
 					}
 				}
 			}
@@ -192,7 +209,10 @@ class WPF_Public
 		if ( !in_array( 'wpseo_head', $wp_current_filter ) ) {//fix conflict with wpseo(calling the content in the header)
 			remove_filter( 'the_content', array( $this, 'result_container' ), 20, 1 );
 		}
-		$slug = !empty( $_REQUEST['wpf'] ) ? sanitize_key( $_REQUEST['wpf'] ) : $this->shortcode_id;
+		$slug = self::request_wpf_slug();
+		if ( '' === $slug ) {
+			$slug = $this->shortcode_id;
+		}
 		$option = WPF_Options::get_option( $this->plugin_name, $this->version );
 		$forms = $option->get();
 		$is_infinity = '';
@@ -205,26 +225,21 @@ class WPF_Public
 			if ( $is_result_page && !$show_result_in_same_page && $show_form_in_results ) {
 				$request = array();
 				$this->shortcode_id = $slug;
-				if ( ! empty( $_REQUEST['wpf'] ) ) {
-					$option = WPF_Options::get_option( $this->plugin_name, $this->version );
-					$forms = $option->get();
-					if ( !empty( $forms[ $_REQUEST['wpf'] ] ) ) {
-						$this->shortcode_id = $_REQUEST['wpf'];
-						$request = $this->parse_query( $_REQUEST, $forms[ $_REQUEST['wpf'] ], false );
-					}
+				if ( '' !== $slug && ! empty( $forms[ $slug ] ) ) {
+					$request = $this->parse_query( $_REQUEST, $forms[ $slug ], false );
 				}
 				$wpf_form = new WPF_Form( $this->plugin_name, $this->version, $slug );
 				echo $wpf_form->public_themplate( $forms[ $slug ], self::$result_page, $request );
 			}
 		}
 		if ( is_woocommerce() ) {
-			echo '<div data-slug="' . $slug . '" class="wpf-search-container' . $is_infinity . '">';
+			echo '<div data-slug="' . esc_attr( $slug ) . '" class="wpf-search-container' . esc_attr( $is_infinity ) . '">';
             add_action( 'woocommerce_after_main_content', array( $this, 'close_div' ), 1 );
 			if ( !empty( self::$result ) ) {
 				ob_start();
 			}
 		} else {
-			return $content . '<div data-slug="' . $slug . '" class="wpf-search-container' . $is_infinity . '">' . self::$result . '</div>';
+			return $content . '<div data-slug="' . esc_attr( $slug ) . '" class="wpf-search-container' . esc_attr( $is_infinity ) . '">' . self::$result . '</div>';
 		}
 	}
 
@@ -267,7 +282,7 @@ class WPF_Public
 				add_filter( 'wc_get_template', array( $this, 'hide_templates' ), 100, 5 );
 			}
 			add_action( 'woocommerce_after_shop_loop', array( $this, 'wrap_pagination' ), 1 );
-			if ( !WPF_Utils::is_ajax() || ( isset( $_POST['wpf_page_id'] ) && wc_get_page_id( 'shop' ) != $_POST['wpf_page_id'] ) ) {
+			if ( !WPF_Utils::is_ajax() || ( isset( $_POST['wpf_page_id'] ) && wc_get_page_id( 'shop' ) != absint( self::wpf_request_scalar( $_POST['wpf_page_id'] ) ) ) ) {
 				add_filter( 'woocommerce_show_page_title', '__return_false', 99, 1 );
 			} else {
 				add_filter( 'woocommerce_page_title', array( $this, 'get_page_title' ) );
@@ -282,7 +297,10 @@ class WPF_Public
 			$sort_bar = !is_woocommerce() && ( empty( $form['data']['result'] ) || empty( $form['data']['sort'] ) );
 			$query_args = apply_filters( 'wpf_query', $query_args );
 			if ( !empty( $data['s'] ) ) {
-				$query_args['s'] = $data['s'];
+				$search = self::wpf_request_scalar( $data['s'] );
+				if ( $search !== '' ) {
+					$query_args['s'] = $search;
+				}
 			}
 			if ( $sort_bar ) {
 				global $wp_query;
@@ -364,9 +382,231 @@ class WPF_Public
 		$this->nullify_template( 'loop/pagination.php' );
 	}
 
+	/**
+	 * When filtering from a native product taxonomy archive, AJAX requests are no longer `is_tax()`.
+	 * Hidden `wpf_arc_tax` + `wpf_arc_term` replay that scope when the shopper clears the matching facet UI.
+	 *
+	 * @param array $post Raw request ($_GET-shaped).
+	 * @param array $layout Form layout slice (passed by reference; may gain virtual facet keys).
+	 * @return array
+	 */
+	private function merge_archived_product_taxonomy_into_request( array $post, array &$layout ) {
+		if ( empty( $post['wpf_arc_tax'] ) || '' === trim( (string) $post['wpf_arc_tax'] )
+			|| empty( $post['wpf_arc_term'] ) || '' === trim( (string) $post['wpf_arc_term'] ) ) {
+			return $post;
+		}
+		$taxonomy = sanitize_key( $post['wpf_arc_tax'] );
+		$tid      = absint( $post['wpf_arc_term'] );
+		if ( '' === $taxonomy || $tid < 1 ) {
+			return $post;
+		}
+
+		$term = get_term( $tid );
+		if ( ! $term || is_wp_error( $term ) || $term->taxonomy !== $taxonomy ) {
+			return $post;
+		}
+
+		if ( ! in_array( $taxonomy, array( 'product_cat', 'product_tag' ), true ) ) {
+			return $post;
+		}
+
+		$facet_type = 'product_cat' === $taxonomy ? 'wpf_cat' : 'wpf_tag';
+
+		if ( empty( $layout[ $facet_type ] ) ) {
+			$layout[ $facet_type ] = array( 'logic' => 'in' );
+		}
+
+		if ( $this->request_param_nonempty_for_facet_field( $post, $layout[ $facet_type ], $facet_type ) ) {
+			return $post;
+		}
+
+		$slug = sanitize_title( $term->slug );
+		if ( '' === $slug ) {
+			return $post;
+		}
+
+		$key = WPF_Utils::strtolower( urldecode( WPF_Utils::get_field_name( $layout[ $facet_type ], $facet_type ) ) );
+		$post[ $key ] = $slug;
+
+		return $post;
+	}
+
+	/**
+	 * @param array  $post
+	 * @param array  $facet_item Layout module for facet type (e.g. wpf_cat).
+	 * @param string $facet_type Lowercase facet key such as `wpf_cat`.
+	 */
+	private function request_param_nonempty_for_facet_field( array $post, array $facet_item, $facet_type ) {
+		$key = WPF_Utils::strtolower( urldecode( WPF_Utils::get_field_name( $facet_item, $facet_type ) ) );
+		if ( isset( $post[ $key ] ) ) {
+			if ( self::wpf_plain_param_nonempty( $post[ $key ] ) ) {
+				return true;
+			}
+			return false;
+		}
+		// Checkbox-style keys when PHP splits names — guard known variants.
+		if ( isset( $post[ $key . '[]' ] ) && self::wpf_plain_param_nonempty( $post[ $key . '[]' ] ) ) {
+			return true;
+		}
+		foreach ( array_keys( $post ) as $rk ) {
+			$rk = (string) $rk;
+			if ( $rk === $key || 0 === strpos( $rk, $key . '[' ) ) {
+				if ( self::wpf_plain_param_nonempty( $post[ $rk ] ) ) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Sanitized `wpf` query slug, or '' if missing / non-scalar (e.g. ?wpf[]=x).
+	 *
+	 * Case is preserved: imported forms keep the slug from their JSON key, which
+	 * sanitize_key() would lowercase into a non-matching lookup.
+	 *
+	 * @return string
+	 */
+	public static function request_wpf_slug() {
+		if ( ! isset( $_REQUEST['wpf'] ) || ! is_scalar( $_REQUEST['wpf'] ) ) {
+			return '';
+		}
+		return preg_replace( '/[^A-Za-z0-9_\-]/', '', (string) wp_unslash( $_REQUEST['wpf'] ) );
+	}
+
+	/**
+	 * First scalar string from a request value (arrays from ?foo[]= are rejected for string fields).
+	 *
+	 * @param mixed $v
+	 * @return string
+	 */
+	private static function wpf_request_scalar( $v ) {
+		if ( is_array( $v ) ) {
+			$v = reset( $v );
+		}
+		if ( ! is_scalar( $v ) ) {
+			return '';
+		}
+		return (string) $v;
+	}
+
+	/**
+	 * Sanitize taxonomy facet values; keep a list of scalars only.
+	 *
+	 * @param mixed $v
+	 * @return string|array
+	 */
+	private static function wpf_sanitize_request_terms( $v ) {
+		if ( ! is_array( $v ) ) {
+			return is_scalar( $v ) ? sanitize_text_field( urldecode( (string) $v ) ) : '';
+		}
+		$out = array();
+		foreach ( $v as $item ) {
+			if ( ! is_scalar( $item ) ) {
+				continue;
+			}
+			$item = sanitize_text_field( urldecode( (string) $item ) );
+			if ( $item !== '' ) {
+				$out[] = $item;
+			}
+		}
+		return $out;
+	}
+
+	private static function wpf_plain_param_nonempty( $v ) {
+		if ( is_array( $v ) ) {
+			foreach ( $v as $item ) {
+				if ( is_scalar( $item ) && '' !== trim( (string) $item ) ) {
+					return true;
+				}
+			}
+			return false;
+		}
+		return is_scalar( $v ) && '' !== trim( (string) $v );
+	}
+
+	/**
+	 * Min/max catalog price rails for the price slider excluding the active price range filter.
+	 *
+	 * @param array<string,mixed> $raw_request Unslashed request (typically $_REQUEST).
+	 * @param array               $form        Full form (layout + data).
+	 * @return array{0: float|int, 1: float|int}|null Null if unavailable (falls back to global min/max).
+	 */
+	public function get_faceted_price_bounds( array $raw_request, array $form ) {
+		if ( empty( $form['layout']['price'] ) ) {
+			return null;
+		}
+		self::set_silent_parse_query( true );
+		try {
+			$stripped = WPF_Utils::strip_request_fields_for_facets(
+				$raw_request,
+				$form['layout'],
+				'price'
+			);
+			$qa = $this->parse_query( $stripped, $form, true );
+		} finally {
+			self::set_silent_parse_query( false );
+		}
+
+		if ( empty( $qa ) || ! is_array( $qa ) ) {
+			return null;
+		}
+
+		unset( $qa['offset'] );
+
+		$bounds = array();
+
+		remove_filter( 'posts_clauses', array( $this, 'order_by_popularity' ), 10 );
+		remove_filter( 'posts_clauses', array( $this, 'order_by_rating' ), 10 );
+
+		foreach ( array( 'ASC' => 'min', 'DESC' => 'max' ) as $order => $_label ) {
+			$pargs = wp_parse_args(
+				array(
+					'posts_per_page' => 1,
+					'paged' => 1,
+					'fields' => 'ids',
+					'no_found_rows' => true,
+					'orderby' => 'meta_value_num ID',
+					'order' => $order,
+					'meta_key' => '_price',
+				),
+				$qa
+			);
+			$pargs['meta_query'][] = array(
+				'key'     => '_price',
+				'compare' => 'EXISTS',
+			);
+
+			$q = new WP_Query( $pargs );
+			if ( empty( $q->posts[0] ) ) {
+				wp_reset_postdata();
+				return null;
+			}
+			$bounds[ $order ] = (float) get_post_meta( (int) $q->posts[0], '_price', true );
+			wp_reset_postdata();
+		}
+
+		$min_val = isset( $bounds['ASC'] ) ? $bounds['ASC'] : null;
+		$max_val = isset( $bounds['DESC'] ) ? $bounds['DESC'] : null;
+		if ( null === $min_val || null === $max_val || $min_val !== $min_val || $max_val !== $max_val ) {
+			return null;
+		}
+
+		$out = array( floor( $min_val ), ceil( $max_val ) );
+
+		return apply_filters( 'wpf_faceted_price_bounds', $out, $raw_request, $form );
+	}
+
 	public function parse_query( array $post, array $form, $build = true ) {
 		$layout = $form['layout'];
 		$data = $form['data'];
+		if ( empty( $layout['wpf_cat'] ) && is_product_category() ) {
+			$layout['wpf_cat'] = [ 'logic' => 'in' ];
+		}
+		if ( empty( $layout['wpf_tag'] ) && is_product_tag() ) {
+			$layout['wpf_tag'] = [ 'logic' => 'in' ];
+		}
+		$post = $this->merge_archived_product_taxonomy_into_request( wp_unslash( $post ), $layout );
 		if ( $build ) {
 			$query_args = array(
 				'post_type' => [ 'product' ],
@@ -379,6 +619,9 @@ class WPF_Public
 				'posts_per_page' => !empty( $data['posts_per_page'] ) ? (int)$data['posts_per_page'] : apply_filters( 'loop_shop_per_page', get_option( 'posts_per_page' ) ),
 				'paged' => WPF_Utils::get_paged(),
 			);
+			if ( empty( $data['variations'] ) ) {
+				$query_args['post_parent'] = 0;
+			}
 			if ( ! empty( $data['variations'] ) ) {
 				$query_args['post_type'][] = 'product_variation';
 			}
@@ -386,10 +629,14 @@ class WPF_Public
 			$query_args['offset'] = ( $query_args['paged'] - 1 ) * $query_args['posts_per_page'];
 
 			$this->pagination = $data['pagination_type'];
-			if ( ! empty( $data['pagination'] ) ) {
+			if ( ! self::$silent_parse_query ) {
+				if ( ! empty( $data['pagination'] ) ) {
+					$this->pagination = false;
+				} else {
+					add_action( 'loop_end', array( $this, 'pagination' ) );
+				}
+			} elseif ( ! empty( $data['pagination'] ) ) {
 				$this->pagination = false;
-			} else {
-				add_action( 'loop_end', array( $this, 'pagination' ) );
 			}
 
 
@@ -399,22 +646,21 @@ class WPF_Public
 				$this->set_order( get_option( 'woocommerce_default_catalog_orderby','menu_order title' ), $query_args );
 			}
 			$query_args['order'] = !empty( $query_args['order'] ) ? $query_args['order'] : 'ASC';
-			if ( $this->append || !empty( $data['sort'] ) ) {
-				remove_action( 'woocommerce_after_shop_loop', 'woocommerce_catalog_ordering', 30 );
-				remove_action( 'woocommerce_before_shop_loop', 'woocommerce_catalog_ordering', 30 );
-				$this->nullify_template( 'loop/orderby.php' );
+			if ( ! self::$silent_parse_query ) {
+				if ( $this->append || !empty( $data['sort'] ) ) {
+					remove_action( 'woocommerce_after_shop_loop', 'woocommerce_catalog_ordering', 30 );
+					remove_action( 'woocommerce_before_shop_loop', 'woocommerce_catalog_ordering', 30 );
+					$this->nullify_template( 'loop/orderby.php' );
+				}
+				if ( $this->append || !empty( $data['result'] ) ) {
+					remove_action( 'woocommerce_after_shop_loop', 'woocommerce_result_count', 20 );
+					remove_action( 'woocommerce_before_shop_loop', 'woocommerce_result_count', 20 );
+					$this->nullify_template( 'loop/result-count.php' );
+				}
+				add_action( 'woocommerce_no_products_found', array( $this, 'not_found_product' ), 10, 1 );
 			}
-			if ( $this->append || !empty( $data['result'] ) ) {
-				remove_action( 'woocommerce_after_shop_loop', 'woocommerce_result_count', 20 );
-				remove_action( 'woocommerce_before_shop_loop', 'woocommerce_result_count', 20 );
-				$this->nullify_template( 'loop/result-count.php' );
-			}
-			add_action( 'woocommerce_no_products_found', array( $this, 'not_found_product' ), 10, 1 );
 		}
 		$args = array();
-		if ( empty( $layout['wpf_cat'] ) && is_product_category() ) {
-		    $layout['wpf_cat'] = [ 'logic' => 'in' ];
-        }
 		foreach ( $layout as $type => $item ) {
 			if ( $type !== 'submit' ) {
 				$key = WPF_Utils::strtolower( WPF_Utils::get_field_name( $item, $type ) );
@@ -429,10 +675,19 @@ class WPF_Public
 						if ( empty( $item['price_type'] ) || $item['price_type'] === 'slider' ) {
 							$key2 = WPF_Utils::strtolower( WPF_Utils::get_field_name( $item, $type ) );
 							$key2 = urldecode( $key2 );
-							$val = array( 'from' => intval( $post[ $key ] ), 'to' => intval( $post[ $key2 . '-to' ] ) );
+							$from = self::wpf_request_scalar( $post[ $key ] );
+							$to   = isset( $post[ $key2 . '-to' ] ) ? self::wpf_request_scalar( $post[ $key2 . '-to' ] ) : '';
+							if ( $from === '' && $to === '' ) {
+								continue;
+							}
+							$val = array( 'from' => intval( $from ), 'to' => intval( $to ) );
 						} else {
-							$tmp_v = explode( '-', $post[ $key ] );
-							$val = array( 'from' => floatval( $tmp_v[0] ), 'to' => floatval( $tmp_v[1] ) );
+							$price_range = self::wpf_request_scalar( $post[ $key ] );
+							if ( $price_range === '' ) {
+								continue;
+							}
+							$tmp_v = explode( '-', $price_range );
+							$val = array( 'from' => floatval( $tmp_v[0] ), 'to' => floatval( isset( $tmp_v[1] ) ? $tmp_v[1] : 0 ) );
 						}
 
 						// WooCommerce Multilingual plugin support
@@ -454,8 +709,17 @@ class WPF_Public
 						}
                         $val = apply_filters( 'wpf_filter_by_price', $val );
 
+					} elseif ( in_array( $type, array( 'title', 'sku', 'instock', 'onsale' ), true ) ) {
+						$raw = self::wpf_request_scalar( $post[ $key ] );
+						if ( $raw === '' ) {
+							continue;
+						}
+						$val = sanitize_text_field( urldecode( $raw ) );
 					} else {
-						$val = is_array( $post[ $key ] ) ? $post[ $key ] : sanitize_text_field( urldecode( $post[ $key ] ) );
+						$val = self::wpf_sanitize_request_terms( $post[ $key ] );
+						if ( $val === '' || $val === array() ) {
+							continue;
+						}
 					}
 					if ( $build ) {
 						$this->build_query( $type, $val, $query_args, $item );
@@ -520,7 +784,21 @@ class WPF_Public
 				break;
 
 			case 'onsale':
-				$query_args['post__in'] = array_merge( array( 0 ), wc_get_product_ids_on_sale() );
+				$query_args['meta_query'][] = array(
+					'relation' => 'OR',
+					array(
+						'key'     => '_sale_price',
+						'value'   => 0,
+						'compare' => '>',
+						'type'    => 'NUMERIC',
+					),
+					array(
+						'key'     => '_min_variation_sale_price',
+						'value'   => 0,
+						'compare' => '>',
+						'type'    => 'NUMERIC',
+					),
+				);
 				break;
 
 			case 'instock':
@@ -533,12 +811,30 @@ class WPF_Public
 
 			case 'wpf_tag':
 			case 'wpf_cat':
+				$taxonomy = str_replace( 'wpf', 'product', $type );
+				$terms    = is_array( $value ) ? $value : explode( ',', $value );
+				$terms    = array_values(
+					array_filter(
+						array_map(
+							static function ( $v ) {
+								return sanitize_title( is_string( $v ) ? trim( $v ) : (string) $v );
+							},
+							$terms
+						)
+					)
+				);
+				if ( isset( $data['logic'] ) && 'and' === $data['logic'] ) {
+					$terms = WPF_Utils::prune_ancestor_terms_for_and_query( $taxonomy, $terms );
+				}
+				if ( empty( $terms ) ) {
+					break;
+				}
 				$query_args['tax_query'][] = array(
-					'taxonomy' => str_replace( 'wpf', 'product', $type ),
-					'field' => 'slug',
-					'terms' => is_array( $value ) ? $value : explode( ',', $value ),
-					'operator' => $data['logic'] === 'and' ? 'AND' : 'IN',
-					'include_children' => !isset( $data['include'] ) || $data['include'] !== 'no'
+					'taxonomy'         => $taxonomy,
+					'field'            => 'slug',
+					'terms'            => $terms,
+					'operator'         => isset( $data['logic'] ) && 'and' === $data['logic'] ? 'AND' : 'IN',
+					'include_children' => ! isset( $data['include'] ) || 'no' !== $data['include'],
 				);
 				break;
 
@@ -546,12 +842,36 @@ class WPF_Public
 				$taxes = WPF_Utils::get_wc_taxonomies();
 
 				if ( isset( $taxes[ $type ] ) ) {
-					$query_args['tax_query'][] = array(
-						'taxonomy' => $type,
-						'field' => 'slug',
-						'terms' => is_array( $value ) ? $value : explode( ',', $value ),
-						'operator' => $data['logic'] === 'and' ? 'AND' : 'IN'
+					$taxonomy = $type;
+					$terms    = is_array( $value ) ? $value : explode( ',', $value );
+					$terms    = array_values(
+						array_filter(
+							array_map(
+								static function ( $v ) {
+									return sanitize_title( is_string( $v ) ? trim( $v ) : (string) $v );
+								},
+								$terms
+							)
+						)
 					);
+					if ( isset( $data['logic'] ) && 'and' === $data['logic'] ) {
+						$terms = WPF_Utils::prune_ancestor_terms_for_and_query( $taxonomy, $terms );
+					}
+					if ( empty( $terms ) ) {
+						break;
+					}
+					$item = array(
+						'taxonomy' => $taxonomy,
+						'field'    => 'slug',
+						'terms'    => $terms,
+						'operator' => isset( $data['logic'] ) && 'and' === $data['logic'] ? 'AND' : 'IN',
+					);
+					if ( taxonomy_exists( $taxonomy ) && is_taxonomy_hierarchical( $taxonomy )
+						&& ( ! isset( $data['include'] ) || 'no' !== $data['include'] )
+					) {
+						$item['include_children'] = true;
+					}
+					$query_args['tax_query'][] = $item;
 				}
 
 				break;
@@ -650,7 +970,8 @@ class WPF_Public
 
 	public function get_page_title( $title ) {
 		if ( !empty( $_POST['wpf_page_id'] ) ) {
-			$p = get_post( $_POST['wpf_page_id'] );
+			$page_id = absint( self::wpf_request_scalar( $_POST['wpf_page_id'] ) );
+			$p = $page_id > 0 ? get_post( $page_id ) : null;
 			if ( !empty( $p ) ) {
 				$title = $p->post_title;
 			}
@@ -759,7 +1080,9 @@ class WPF_Public
 	}
 
 	public function autocomplete() {
-		if ( !empty( $_POST['key'] ) && in_array( $_POST['key'], array( 'sku', 'title' ) ) && !empty( $_POST['term'] ) && strlen( $_POST['term'] ) > 0 ) {
+		$post_key  = isset( $_POST['key'] ) ? self::wpf_request_scalar( wp_unslash( $_POST['key'] ) ) : '';
+		$post_term = isset( $_POST['term'] ) ? self::wpf_request_scalar( wp_unslash( $_POST['term'] ) ) : '';
+		if ( in_array( $post_key, array( 'sku', 'title' ), true ) && $post_term !== '' ) {
 			$args = array(
 				'post_type' => array( 'product', 'product_variation' ),
 				'post_status' => 'publish',
@@ -771,8 +1094,8 @@ class WPF_Public
 				unset( $args['post_type'][1] );
 			}
 
-			$term = sanitize_text_field( $_POST['term'] );
-			$by_title = $_POST['key'] === 'title';
+			$term = sanitize_text_field( $post_term );
+			$by_title = $post_key === 'title';
 			if ( $by_title ) {
 				$args['s'] = $term;
 			} else {
@@ -806,6 +1129,48 @@ class WPF_Public
 		wp_die();
 	}
 
+	/**
+	 * Re-render .wpf_items_wrapper for AJAX product filters (same state as catalog GET).
+	 */
+	public function ajax_refresh_facets() {
+		check_ajax_referer( 'wpf_refresh_facets', 'nonce' );
+		$slug = self::request_wpf_slug();
+		if ( '' === $slug ) {
+			wp_send_json_error( array( 'message' => 'missing wpf' ), 400 );
+		}
+		$option = WPF_Options::get_option( $this->plugin_name, $this->version );
+		$forms  = $option->get();
+		if ( empty( $forms[ $slug ] ) ) {
+			wp_send_json_error( array( 'message' => 'unknown form' ), 404 );
+		}
+
+		$query_raw = isset( $_POST['query'] ) ? wp_unslash( $_POST['query'] ) : '';
+		$parsed    = array();
+		if ( is_string( $query_raw ) && $query_raw !== '' ) {
+			parse_str( $query_raw, $parsed );
+		}
+		$parsed['wpf'] = $slug;
+
+		$bak_get     = $_GET;
+		$bak_request = $_REQUEST;
+
+		$_GET     = $parsed;
+		$_REQUEST = $parsed;
+
+		$request  = $this->parse_query( $_REQUEST, $forms[ $slug ], false );
+		$wpf_form = new WPF_Form( $this->plugin_name, $this->version, $slug );
+		$html     = $wpf_form->get_items_wrapper_markup( $forms[ $slug ], $request );
+
+		$_GET     = $bak_get;
+		$_REQUEST = $bak_request;
+
+		wp_send_json_success(
+			array(
+				'html' => $html,
+			)
+		);
+	}
+
 	function themify_add_decimal_params( $sqlarr ) {
 		remove_filter( 'get_meta_sql', 'themify_add_decimal_params' );
 
@@ -831,21 +1196,40 @@ class WPF_Public
 	}
 
 	function change_query( $query ) {
-		if ( $form = $this->get_form( sanitize_key( $_GET['wpf'] ) ) ) {
-			$args = $this->parse_query( $_GET, $form );
+		$slug = self::request_wpf_slug();
+		if ( '' === $slug ) {
+			return;
+		}
+		if ( $form = $this->get_form( $slug ) ) {
+			$args = $this->parse_query( wp_unslash( $_REQUEST ), $form );
 
-            // on tax archives, filter down the products list
-            if ( is_tax( get_object_taxonomies( 'product' ) ) ) {
-                if ( ! isset( $args['tax_query'] ) ) {
-                    $args['tax_query'] = [];
-                }
-                $queried_object = get_queried_object();
-                $args['tax_query'][] = [
-                    'taxonomy' => $queried_object->taxonomy,
-                    'field' => 'term_id',
-                    'terms' => $queried_object->term_id
-                ];
-            }
+			// Narrow archive context unless the URL already expresses that taxonomy via WPF (avoids slug + duplicate term_id clauses).
+			if ( is_tax( get_object_taxonomies( 'product' ) ) ) {
+				$queried_object          = get_queried_object();
+				$taxonomy_filter_present = false;
+				if ( ! empty( $args['tax_query'] ) && is_array( $args['tax_query'] ) && isset( $queried_object->taxonomy ) ) {
+					foreach ( $args['tax_query'] as $k => $tq ) {
+						if ( 'relation' === $k ) {
+							continue;
+						}
+						if ( is_array( $tq ) && ! empty( $tq['taxonomy'] )
+							&& $tq['taxonomy'] === $queried_object->taxonomy ) {
+							$taxonomy_filter_present = true;
+							break;
+						}
+					}
+				}
+				if ( ! $taxonomy_filter_present && isset( $queried_object->taxonomy, $queried_object->term_id ) ) {
+					if ( ! isset( $args['tax_query'] ) ) {
+						$args['tax_query'] = array();
+					}
+					$args['tax_query'][] = array(
+						'taxonomy' => $queried_object->taxonomy,
+						'field'    => 'term_id',
+						'terms'    => $queried_object->term_id,
+					);
+				}
+			}
 
 			foreach ( $args as $k => $v ) {
 				// Don't override the var that is empty and has default value #8913
@@ -908,6 +1292,9 @@ class WPF_Public
 
 	function change_shop_query( $query ) {
 		if ( WPF_Utils::is_wpf_query( $query ) ) {
+			if ( ! empty( $query->get( 'wpf_merged' ) ) ) {
+				return;
+			}
 			$this->change_query( $query );
 			if ( is_product_category() ) {
 				$query->set( 'product_cat', false );
@@ -934,6 +1321,6 @@ class WPF_Public
 	}
 
     function canonical_link( $url ) {
-        echo '<link rel="canonical" href="', WPF_Utils::get_unfiltered_url() ,'" />';
+        echo '<link rel="canonical" href="' . esc_url( WPF_Utils::get_unfiltered_url() ) . '" />';
     }
 }

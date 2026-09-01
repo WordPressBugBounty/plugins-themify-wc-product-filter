@@ -181,6 +181,7 @@ class WPF {
 
 	public static function plugins_compatibility() {
 		$plugins = array(
+			'themifyBuilderPro' => defined( 'TBP_VER' ),
 			'PremiumAddonsForElementor' => defined( 'PREMIUM_ADDONS_VERSION' ),
 			'wooPayments' => defined( 'WCPAY_ABSPATH' ),
 		);

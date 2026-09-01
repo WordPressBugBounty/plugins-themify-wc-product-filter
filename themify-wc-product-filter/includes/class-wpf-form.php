@@ -20,6 +20,12 @@ class WPF_Form {
      */
     protected $version;
     protected $themplate_id = false;
+	/**
+	 * Snapshot of layout + data for facet count queries inside get_public_fields.
+	 *
+	 * @var array{layout?: array, data?: array}
+	 */
+	protected $facet_form_bundle = array( 'layout' => array(), 'data' => array() );
 
     /**
      * Initialize the class and set its properties.
@@ -575,6 +581,7 @@ class WPF_Form {
                 $order = array(
                     'term_order' => __('Custom Ordering', 'wpf'),
                     'name' => __('Name', 'wpf'),
+                    'name_natural' => __('Name (natural)', 'wpf'),
                     'count' => __('Count', 'wpf'),
                     'id' => __('ID', 'wpf'),
                 );
@@ -785,6 +792,95 @@ class WPF_Form {
         <?php
     }
 
+	/**
+	 * Markup inside .wpf_items_wrapper (module list only).
+	 *
+	 * @param array $template Form template (layout + data).
+	 * @param array $request  Parsed request from WPF_Public::parse_query( ..., false ).
+	 * @return string
+	 */
+	protected function render_filter_layout_items_markup( array $template, array $request ) {
+		if ( empty( $template['layout'] ) ) {
+			return '';
+		}
+		$lang          = WPF_Utils::get_current_language_code();
+		$layout        = $template['layout'];
+		$this->facet_form_bundle = array(
+			'layout' => $layout,
+			'data'   => isset( $template['data'] ) ? $template['data'] : array(),
+		);
+		$sort_cmb      = WPF_Utils::get_all_field_types();
+		$is_horizontal = $template['data']['type'] === 'horizontal';
+		$is_group      = ! empty( $template['data']['group'] ) || $is_horizontal;
+		$reset_btn     = ! empty( $template['data']['reset_button'] ) ? $template['data']['reset_button'] : 'no';
+		$reset         = ! empty( $template['data']['clear_label'] ) ? WPF_Utils::get_label( $template['data']['clear_label'] ) : '';
+		if ( empty( $reset ) ) {
+			$reset = __( 'Clear', 'wpf' );
+		}
+		if ( 'group' === $reset_btn ) {
+			$non_groups = array( 'submit', 'instock', 'onsale' );
+		} else {
+			$non_groups = array();
+		}
+		ob_start();
+		foreach ( $layout as $type => $module ) {
+			if ( empty( $sort_cmb[ $type ] ) ) {
+				continue;
+			}
+			ob_start();
+			if ( has_action( 'wpf_public_template_' . $type ) ) {
+				do_action( 'wpf_public_template_' . $type, $module, $this->themplate_id, $template['data'], $sort_cmb[ $type ], $this->themplate_id, $request, $lang );
+			} else {
+				$this->get_public_fields( $type, $module, $template['data'], $request, $lang );
+			}
+			$view = trim( ob_get_clean() );
+			if ( $view || empty( $template['data']['empty'] ) ) {
+				echo '<div class="wpf_item wpf_item_' . esc_attr( $type ) . '">';
+				if ( 'submit' !== $type && ( $is_horizontal || empty( $module['hide_field'] ) ) ) {
+					echo '<div class="wpf_item_name">';
+					echo esc_html( WPF_Utils::get_field_name( $module, $sort_cmb[ $type ] ) );
+					echo '</div>';
+				}
+				if ( $is_group && 'submit' !== $type ) {
+					echo '<div class="wpf_items_group">';
+				}
+				// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+				echo $view;
+				if ( 'group' === $reset_btn && ! in_array( $type, $non_groups, true ) ) {
+					echo '<div class="wpf_reset_btn"><input type="reset" value="' . esc_attr( $reset ) . '"/></div>';
+				}
+				if ( $is_group && 'submit' !== $type ) {
+					echo '</div>';
+				}
+				echo '</div>';
+			}
+		}
+
+		return ob_get_clean();
+	}
+
+	/**
+	 * Full AJAX-replace fragment: outer div.wpf_items_wrapper and children.
+	 *
+	 * @param array $template Form template (layout + data).
+	 * @param array $request  Parsed request from WPF_Public::parse_query( ..., false ).
+	 * @return string
+	 */
+	public function get_items_wrapper_markup( array $template, array $request ) {
+		if ( empty( $template['layout'] ) ) {
+			return '';
+		}
+		$is_horizontal = $template['data']['type'] === 'horizontal';
+		$is_group      = ! empty( $template['data']['group'] ) || $is_horizontal;
+
+		return sprintf(
+			'<div class="wpf_items_wrapper wpf_layout_%1$s%2$s">%3$s</div>',
+			esc_attr( $template['data']['type'] ),
+			$is_group ? ' wpf_items_grouped' : '',
+			$this->render_filter_layout_items_markup( $template, $request )
+		);
+	}
+
     /**
      * Frontend layout render
      *
@@ -799,7 +895,10 @@ class WPF_Form {
         }
         $lang = WPF_Utils::get_current_language_code();
         $layout = $template['layout'];
-		$sort_cmb = WPF_Utils::get_all_field_types();
+		$this->facet_form_bundle = array(
+			'layout' => $layout,
+			'data'   => isset( $template['data'] ) ? $template['data'] : array(),
+		);
         $is_horizontal = $template['data']['type'] === 'horizontal';
         $is_group = !empty($template['data']['group']) || $is_horizontal;
         $page = get_permalink($template['data']['page']);
@@ -815,9 +914,6 @@ class WPF_Form {
 			$reset = __( 'Clear', 'wpf' );
 		}
 		$infinitybuffer = ! empty( $template['data']['infinitybuffer'] ) ? $template['data']['infinitybuffer'] : 300;
-        if('group' === $reset_btn){
-            $non_groups = array('submit','instock','onsale');
-        }
         $clasess = array('wpf_form', 'wpf_form_' . $this->themplate_id);
         if ($scroll) {
             $clasess[] = 'wpf_form_scroll';
@@ -863,53 +959,40 @@ class WPF_Form {
 		$action = WPF_Utils::get_unfiltered_url( $action );
         ?>
         <form
-			data-post-id="<?php echo $post_id; ?>"
-			data-slug="<?php echo $this->themplate_id ?>"
-			action="<?php echo esc_attr( $action ); ?>"
-			data-shop="<?php echo esc_attr( $shop_page ); ?>"
+			data-post-id="<?php echo esc_attr( $post_id ); ?>"
+			data-slug="<?php echo esc_attr( $this->themplate_id ) ?>"
+			action="<?php echo esc_url( $action ); ?>"
+			data-shop="<?php echo esc_url( $shop_page ); ?>"
 			method="get"
-			class="<?php echo implode(' ', $clasess) ?>"
+			class="<?php echo esc_attr( implode(' ', $clasess) ) ?>"
 			style="visibility: hidden;"
 			data-infinitybuffer="<?php echo esc_attr( $infinitybuffer ); ?>"
+			data-wpf-tax-relation="<?php echo esc_attr( isset( $template['data']['tax_relation'] ) ? $template['data']['tax_relation'] : 'or' ); ?>"
 		>
-            <input type="hidden" name="wpf" value="<?php echo $this->themplate_id ?>" />
+            <input type="hidden" name="wpf" value="<?php echo esc_attr( $this->themplate_id ) ?>" />
 			<input type="hidden" name="orderby" value="" />
 			<input type="hidden" name="wpf_cols" value="" />
 			<input type="hidden" name="wpf_page" value="1" />
 			<?php if ( ! empty( $_GET['s'] ) ) : ?>
-                <input type="hidden" value="<?php echo sanitize_text_field( $_GET['s'] ); ?>" name="s" />
+                <input type="hidden" value="<?php echo esc_attr( sanitize_text_field( wp_unslash( $_GET['s'] ) ) ); ?>" name="s" />
 			<?php endif; ?>
             <?php if ( empty( $layout['wpf_cat'] ) && is_product_category() ) : ?>
-                <input type="hidden" value="<?php echo $cate->slug; ?>" name="wpf_cat" />
+                <input type="hidden" value="<?php echo esc_attr( $cate->slug ); ?>" name="wpf_cat" />
             <?php endif; ?>
+			<?php
+			if ( ( is_product_category() || is_product_tag() ) && isset( $cate ) && is_object( $cate ) && ! empty( $cate->taxonomy ) && ! empty( $cate->term_id ) ) :
+				if ( taxonomy_exists( $cate->taxonomy ) && in_array( $cate->taxonomy, array( 'product_cat', 'product_tag' ), true ) ) :
+					?>
+					<input type="hidden" name="wpf_arc_tax" value="<?php echo esc_attr( $cate->taxonomy ); ?>" />
+					<input type="hidden" name="wpf_arc_term" value="<?php echo esc_attr( (string) (int) $cate->term_id ); ?>" />
+					<?php
+				endif;
+			endif;
+			?>
             <div class="wpf_items_wrapper wpf_layout_<?php echo $template['data']['type'] ?><?php if ($is_group): ?> wpf_items_grouped<?php endif; ?>">
-                <?php foreach ($layout as $type => $module): ?>
-                    <?php if (!empty($sort_cmb[$type])): ?>
-                        <?php ob_start(); ?>
-                        <?php if (has_action('wpf_public_template_' . $type)): ?>
-                            <?php do_action('wpf_public_template_' . $type, $module, $this->themplate_id, $template['data'], $sort_cmb[$type], $this->themplate_id, $request, $lang) ?>
-                        <?php else: ?>
-                            <?php $this->get_public_fields($type, $module, $template['data'], $request, $lang) ?>
-                        <?php endif; ?>
-                        <?php
-                        $view = trim(ob_get_contents());
-                        ob_end_clean();
-                        ?>
-                        <?php if ($view || empty($template['data']['empty'])): ?>
-                            <div class="wpf_item wpf_item_<?php echo $type ?>">
-                                <?php if ($type !== 'submit' && ($is_horizontal || empty($module['hide_field']))): ?>
-                                    <div class="wpf_item_name"><?php echo WPF_Utils::get_field_name($module, $sort_cmb[$type]) ?></div>
-                                <?php endif; ?>
-                                <?php if ($is_group && $type !== 'submit'): ?><div class="wpf_items_group"><?php endif; ?>
-                                <?php echo $view ?>
-									<?php if('group' === $reset_btn && !in_array($type,$non_groups) ): ?>
-                                        <div class="wpf_reset_btn"><input type="reset" value="<?php echo esc_attr( $reset ); ?>"/></div>
-									<?php endif; ?>
-                                <?php if ($is_group && $type !== 'submit'): ?></div><?php endif; ?>
-                            </div>
-                        <?php endif; ?>
-                    <?php endif; ?>
-                <?php endforeach; ?>
+				<?php
+				echo $this->render_filter_layout_items_markup( $template, $request );
+				?>
             </div>
             <?php if('bottom' === $reset_btn): ?>
                 <div class="wpf_reset_btn"><input type="reset" value="<?php echo esc_attr( $reset ) ?>"/></div>
@@ -931,7 +1014,8 @@ class WPF_Form {
 		 * Note, the result is not filtered by language, this returns min & max prices from products in ALL languages
 		 */
 		$query_args = array(
-			'post_type' => array( 'product_variation', 'product' ),
+			'post_type' => array( 'product' ),
+			'post_parent' => 0,
 			'post_status' => 'publish',
 			'orderby' => 'meta_value_num',
 			'order' => 'DESC',
@@ -977,7 +1061,13 @@ class WPF_Form {
 				$search_variation = ( $type === 'title' && isset( $args['variation'] ) && $args['variation'] === 'no' ) ? 'data-variation="no"' : '';
                 ?>
                 <div class="wpf_autocomplete">
-                    <input <?php echo $search_variation; ?> type="text" autocomplete="off" name="<?php echo WPF_Utils::strtolower(WPF_Utils::get_field_name($args, $type)); ?>" value="<?php echo $value ? esc_attr($value) : '' ?>" />
+                    <?php
+					if ( is_array( $value ) ) {
+						$value = reset( $value );
+					}
+					$value = is_scalar( $value ) ? (string) $value : '';
+					?>
+                    <input <?php echo $search_variation; ?> type="text" autocomplete="off" name="<?php echo esc_attr( WPF_Utils::strtolower(WPF_Utils::get_field_name($args, $type)) ); ?>" value="<?php echo $value !== '' ? esc_attr( $value ) : '' ?>" />
                     <span class="wpf-search-wait"></span>
                 </div>
                 <?php
@@ -1022,13 +1112,23 @@ class WPF_Form {
 						$value = 1;
 					}
                 }
+				if ( $show && 'onsale' === $type && apply_filters( 'wpf_hide_onsale_when_not_in_faceted_pool', true )
+					&& isset( $data['tax_relation'] ) && strtolower( (string) $data['tax_relation'] ) === 'and'
+					&& ! empty( $_REQUEST['wpf'] ) && ! empty( $this->facet_form_bundle['layout'] )
+				) {
+					$frm_chk = array(
+						'layout' => $this->facet_form_bundle['layout'],
+						'data'   => isset( $this->facet_form_bundle['data'] ) ? $this->facet_form_bundle['data'] : $data,
+					);
+					$show = WPF_Utils::faceted_query_has_on_sale_products( wp_unslash( $_REQUEST ), $frm_chk );
+				}
                 ?>  <?php if ( $show ) : ?>
                     <div class="wpf_<?php echo $type ?>_wrapp">
                         <input 
 							type="checkbox"
-							id="wpf_<?php echo $this->themplate_id ?>_item_<?php echo $type ?>"
+							id="wpf_<?php echo esc_attr( $this->themplate_id ) ?>_item_<?php echo esc_attr( $type ) ?>"
 							<?php if ( ! empty( $value ) ) : ?>checked="checked"<?php endif; ?>
-							name="<?php echo WPF_Utils::strtolower(WPF_Utils::get_field_name($args, $type)); ?>"
+							name="<?php echo esc_attr( WPF_Utils::strtolower(WPF_Utils::get_field_name($args, $type)) ); ?>"
 							value="1"
 						/>
                     </div>
@@ -1046,6 +1146,18 @@ class WPF_Form {
 
                 if ($price_type === 'slider') {
 					list( $min, $max ) = $this->get_min_max_price();
+					if ( isset( $_REQUEST['wpf'] ) && $this->themplate_id && sanitize_key( wp_unslash( $_REQUEST['wpf'] ) ) === $this->themplate_id ) {
+						$bundle = array(
+							'layout' => isset( $this->facet_form_bundle['layout'] ) ? $this->facet_form_bundle['layout'] : array(),
+							'data'   => isset( $this->facet_form_bundle['data'] ) ? $this->facet_form_bundle['data'] : $data,
+						);
+						if ( ! empty( $bundle['layout'] ) ) {
+							$faceted = $wpf->get_faceted_price_bounds( wp_unslash( $_REQUEST ), $bundle );
+							if ( is_array( $faceted ) && isset( $faceted[0], $faceted[1] ) && $faceted[1] >= $faceted[0] ) {
+								list( $min, $max ) = $faceted;
+							}
+						}
+					}
 
 					if ( empty( $max ) ) {
 						return;
@@ -1077,8 +1189,8 @@ class WPF_Form {
 						-
 						<?php echo str_replace( '00000', '<span class="wpf-price-max">' . ( empty( $to ) ? $max : $to ) . '</span>', wc_price( 0, array( 'decimal_separator' => '', 'decimals' => 4 ) ) ); ?>
 					</div>
-					<input type="hidden" name="<?php echo $name ?>-from" value="<?php echo $from ?>" class="wpf_price_from" />
-					<input type="hidden" name="<?php echo $name ?>-to" value="<?php echo $to ?>" class="wpf_price_to" />
+					<input type="hidden" name="<?php echo esc_attr( $name ) ?>-from" value="<?php echo esc_attr( $from ) ?>" class="wpf_price_from" />
+					<input type="hidden" name="<?php echo esc_attr( $name ) ?>-to" value="<?php echo esc_attr( $to ) ?>" class="wpf_price_to" />
 					<?php
                 } elseif (!empty($args['from'])) {
                     $selected = isset($value['from']) && is_numeric($value['from']) ? floor(floatval($value['from'])) : '';
@@ -1120,14 +1232,19 @@ class WPF_Form {
                 $color = !$link && !empty($args['color']);
                 $hide_text = !$link && !$hierarchy && $color && !empty($args['hide']);
                 $column = $args['display'] === 'columns' ? (!empty($args['column']) ? $args['column'] : 1) : false;
-				$taxonomy = str_replace( 'wpf_', 'product_', $type );
+                $global_tax_is_and = isset( $data['tax_relation'] )
+					&& strtolower( (string) $data['tax_relation'] ) === 'and';
+                $facet_frontend    = $global_tax_is_and
+					&& isset( $_REQUEST['wpf'] )
+					&& apply_filters( 'wpf_and_facet_frontend_enabled', true );
+                $taxonomy = str_replace( 'wpf_', 'product_', $type );
                 $q = array(
-                    'hide_empty' => !$hierarchy && !empty($data['empty']),
+                    'hide_empty' => ! $facet_frontend && ! $hierarchy && ! empty( $data['empty'] ),
                     'hierarchical' => $hierarchy,
                     'pad_counts' => $hierarchy
                 );
                 if ($args['order'] !== 'term_order') {
-                    $q['orderby'] = $args['order'];
+                    $q['orderby'] = ( isset( $args['order'] ) && $args['order'] === 'name_natural' ) ? 'name' : $args['order'];
                     $q['order'] = $args['orderby'];
                 }
 
@@ -1138,11 +1255,103 @@ class WPF_Form {
                 if (!empty($args['exclude_cat'])) {
                     $q['exclude'] = self::get_terms( $args['exclude_cat'], $taxonomy );
                 }
-                if ( is_tax( $taxonomy ) && ! empty( $args['arch_ctx'] ) ) {
-                    $q['child_of'] = get_queried_object_id();
-                }
+				$archive_cat_tid = ( 'wpf_cat' === $type && 'product_cat' === $taxonomy )
+					? WPF_Utils::get_active_product_cat_archive_term_id()
+					: 0;
+
+				if ( ! empty( $args['arch_ctx'] ) && $archive_cat_tid > 0 ) {
+					$q['child_of'] = $archive_cat_tid;
+				} elseif (
+					$archive_cat_tid > 0
+					&& apply_filters( 'wpf_category_facet_restrict_to_archive_descendants', true, $args, $data )
+				) {
+					/*
+					 * Limit category choices to this archive subtree (current term + descendants).
+					 * Sibling categories stay out of the list even when products are multi-assigned OR tags narrow the pool.
+					 * OR tax_relation formerly skipped this branch (only AND used child_of), which surfaced Men/etc. again after AJAX.
+					 */
+					$subtree = WPF_Utils::get_product_cat_subtree_term_ids( $archive_cat_tid );
+					if ( ! empty( $subtree ) ) {
+						if ( ! empty( $q['include'] ) ) {
+							$include_ids = array_map( 'intval', (array) $q['include'] );
+							$intersect     = array_values( array_intersect( $include_ids, $subtree ) );
+							$q['include']  = ! empty( $intersect ) ? $intersect : $subtree;
+						} else {
+							$q['include'] = $subtree;
+						}
+					}
+				}
 
                 $categories = get_terms( $taxonomy, $q);
+				$form_for_facets            = array(
+					'layout' => isset( $this->facet_form_bundle['layout'] ) ? $this->facet_form_bundle['layout'] : array(),
+					'data'   => isset( $this->facet_form_bundle['data'] ) ? $this->facet_form_bundle['data'] : $data,
+				);
+				$facet_counts_override      = null;
+				$use_and_facet_intersection = $global_tax_is_and
+					&& isset( $_REQUEST['wpf'] )
+					&& apply_filters( 'wpf_and_facet_counts_enabled', true )
+					&& ! empty( $form_for_facets['layout'] )
+					&& ! is_wp_error( $categories );
+
+				if ( $use_and_facet_intersection ) {
+					$term_ids_plain = wp_list_pluck( $categories, 'term_id' );
+					if ( ! empty( $term_ids_plain ) ) {
+						$facet_counts_override = apply_filters(
+							'wpf_and_facet_counts_map',
+							WPF_Utils::get_and_facet_term_counts( wp_unslash( $_REQUEST ), $form_for_facets, $type, $taxonomy, $term_ids_plain ),
+							wp_unslash( $_REQUEST ),
+							$form_for_facets,
+							$type,
+							$taxonomy,
+							$categories
+						);
+					}
+				}
+
+				if ( ! is_wp_error( $categories ) && ! empty( $categories ) ) {
+					$applied_custom_and_counts = false;
+					if ( $use_and_facet_intersection ) {
+						if ( is_array( $facet_counts_override ) ) {
+							foreach ( $categories as $t_obj ) {
+								$t_obj->count = isset( $facet_counts_override[ $t_obj->term_id ] )
+									? (int) $facet_counts_override[ $t_obj->term_id ]
+									: 0;
+							}
+							$applied_custom_and_counts = true;
+						} elseif ( null === $facet_counts_override ) {
+							foreach ( $categories as $t_obj ) {
+								$t_obj->count = 0;
+							}
+							$applied_custom_and_counts = true;
+						}
+					} elseif ( is_array( $facet_counts_override ) && ! empty( $facet_counts_override ) ) {
+						foreach ( $categories as $t_obj ) {
+							if ( isset( $facet_counts_override[ $t_obj->term_id ] ) ) {
+								$t_obj->count = (int) $facet_counts_override[ $t_obj->term_id ];
+								$applied_custom_and_counts = true;
+							}
+						}
+					}
+
+					if ( ! $applied_custom_and_counts ) {
+						$wc_count_qtype = ( ! empty( $args['logic'] ) && $args['logic'] === 'and' ) ? 'and' : 'or';
+						$categories     = WPF_Utils::maybe_apply_wc_filtered_counts( $categories, $taxonomy, $wc_count_qtype );
+					}
+				}
+                if ( ! is_wp_error( $categories ) && ! empty( $categories ) && ! $hierarchy && ! empty( $args['order'] ) && $args['order'] === 'name_natural' ) {
+                    $desc = ! empty( $args['orderby'] ) && $args['orderby'] === 'desc';
+                    usort(
+                        $categories,
+                        function( $a, $b ) use ( $desc ) {
+                            $c = strnatcasecmp( $a->name, $b->name );
+                            if ( 0 === $c ) {
+                                return 0;
+                            }
+                            return $desc ? -$c : $c;
+                        }
+                    );
+                }
 
                 if ($hierarchy) {
                     $cats = array();
@@ -1169,13 +1378,18 @@ class WPF_Form {
                             $value = array();
 							$value[] = $cat->slug;
                         } elseif ( $type === 'wpf_tag' ) {
-                            $value = explode(',', $value);
+                            $value = is_array( $value ) ? array_values( array_filter( $value, 'is_scalar' ) ) : explode( ',', (string) $value );
 							$value[] = $cat->slug;
 							$selected = $cat->slug;
                         }
                     }
                 }
                 $is_dropdown = 'dropdown' === $args['show_as'] || 'multiselect' === $args['show_as'];
+
+				$walk_hide_unreachable = $use_and_facet_intersection
+					&& apply_filters( 'wpf_and_facet_hide_unreachable_terms', true );
+
+				$walk_hide_empty = ! empty( $data['empty'] ) || $walk_hide_unreachable;
                 if ($is_dropdown) {
                     $args['color'] = false;
                     wp_enqueue_style( $this->plugin_name . '-select' );
@@ -1188,9 +1402,9 @@ class WPF_Form {
                             <ul class="<?php if ($link): ?>wpf_links <?php endif; ?><?php if (!$hierarchy): ?>wpf_column_<?php echo $args['display'] ?><?php if ($column): ?> wpf_column_<?php echo $column ?><?php endif; ?><?php else: ?>wpf_hierachy<?php endif; ?><?php if ($color): ?> wpf_color_icons<?php endif; ?><?php if ($hide_text): ?> wpf_hide_text<?php endif; ?>">
                             <?php endif; ?>
                             <?php if (!empty($args['hierachy']) && is_taxonomy_hierarchical( $taxonomy ) ): ?>
-                                <?php $this->category_walker( isset( $cats[0] ) ? $cats[0] : reset( $cats ), $cats, $type, $args, $value, !empty($data['empty']), $lang); ?>
+                                <?php $this->category_walker( isset( $cats[0] ) ? $cats[0] : reset( $cats ), $cats, $type, $args, $value, $walk_hide_empty, $lang); ?>
                             <?php else: ?>
-                                <?php $this->category_walker($cats, array(), $type, $args, $value, !empty($data['empty']), $lang); ?>
+                                <?php $this->category_walker($cats, array(), $type, $args, $value, $walk_hide_empty, $lang); ?>
                             <?php endif; ?>
                             <?php if ($is_dropdown): ?>
                         </select>
@@ -1246,6 +1460,12 @@ class WPF_Form {
 		$name = urldecode( $name );
         if ($product_count === false && $show_count) {
             $product_count = WPF_Utils::count_posts( 'product' );
+            if ( ! empty( $_GET['wpf'] ) && function_exists( 'wc_get_loop_prop' ) ) {
+                $loop_total = wc_get_loop_prop( 'total' );
+                if ( $loop_total !== null && $loop_total !== '' && (int) $loop_total > 0 ) {
+                    $product_count = (int) $loop_total;
+                }
+            }
         }
         ++$i;
         if ( 2 === $i && ! empty( $args['show_all'] ) ) :
@@ -1254,16 +1474,16 @@ class WPF_Form {
             $term_id = isset($cats->term_id)? $cats->term_id : '';
 
             ?>
-                <li class="<?php echo $name, '_option_all'; ?>">
-                    <input <?php if (empty($value)): ?>checked="checked"<?php endif; ?> id="<?php echo $name, '_option_all'; ?>" type="radio" name="<?php echo $name; ?>[]" value="" />
+                <li class="<?php echo esc_attr( $name . '_option_all' ); ?>">
+                    <input <?php if (empty($value)): ?>checked="checked"<?php endif; ?> id="<?php echo esc_attr( $name . '_option_all' ); ?>" type="radio" name="<?php echo esc_attr( $name ); ?>[]" value="" />
                     <label <?php if (($color && !empty($args['color_bg_' . $term_id])) || !empty($args['image_bg_' . $term_id])): ?>
                             style="
-                            <?php if (!empty($args['image_bg_' . $term_id])):?>background-image: url(<?php echo $args['image_bg_' . $term_id] ?>);background-size: cover;<?php endif;?>
-                            <?php if (!empty($args['color_bg_' . $term_id])):?>background-color:<?php echo $args['color_bg_' . $term_id]?>; <?php endif; ?>
-                            <?php if (!empty($args['color_text_' . $term_id])): ?> color:<?php echo $args['color_text_' . $term_id] ?>;<?php endif; ?>"
+                            <?php if (!empty($args['image_bg_' . $term_id])):?>background-image: url('<?php echo esc_url( $args['image_bg_' . $term_id] ) ?>');background-size: cover;<?php endif;?>
+                            <?php if (!empty($args['color_bg_' . $term_id])):?>background-color:<?php echo esc_attr( $args['color_bg_' . $term_id] )?>; <?php endif; ?>
+                            <?php if (!empty($args['color_text_' . $term_id])): ?> color:<?php echo esc_attr( $args['color_text_' . $term_id] ) ?>;<?php endif; ?>"
                           <?php endif; ?>
-                            for="wpf_<?php echo $this->themplate_id ?>_<?php echo $term_id ?>">
-                    <label <?php if ($color): ?> class="wpf-label-option-all"<?php endif; ?> for="<?php echo $name, '_option_all'; ?>">
+                            for="wpf_<?php echo esc_attr( $this->themplate_id ) ?>_<?php echo esc_attr( $term_id ) ?>">
+                    <label <?php if ($color): ?> class="wpf-label-option-all"<?php endif; ?> for="<?php echo esc_attr( $name . '_option_all' ); ?>">
                         <?php _e('All', 'wpf'); ?>
                     </label>
                     <?php if ($show_count): ?>
@@ -1278,9 +1498,9 @@ class WPF_Form {
                     <?php endif; ?>
                 </option>
             <?php elseif (strpos($type, 'pa_') === 0 && 'link' === $args['show_as']): ?>
-                <li class="<?php echo $name; ?>">
+                <li class="<?php echo esc_attr( $name ); ?>">
                     <a class="wpf_pa_link" href="javascript:void(0)">
-                        <input <?php if (!$value): ?>checked="checked"<?php endif; ?> type="radio" value="" name="<?php echo $name ?>" />
+                        <input <?php if (!$value): ?>checked="checked"<?php endif; ?> type="radio" value="" name="<?php echo esc_attr( $name ) ?>" />
                         <span><?php _e('All', 'wpf'); ?></span>
                     </a>
                     <?php if ($show_count): ?>
@@ -1293,38 +1513,40 @@ class WPF_Form {
         <?php foreach ( $items as $cat ) :
 
 			$cat->slug = urldecode( $cat->slug ); // make slug readable, required for multilingual websites
+            $facets_count_int = is_numeric( $cat->count ) ? (int) $cat->count : 0;
+            $keep_for_selection = in_array( $cat->slug, $value, true );
 			?>
-            <?php if ($hide_empty && $cat->count === 0): ?>
+            <?php if ( $hide_empty && ! $keep_for_selection && $facets_count_int < 1 ) : ?>
                 <?php continue; ?>
             <?php endif; ?>
 
             <?php if ('dropdown' === $args['show_as'] || 'multiselect' === $args['show_as']): ?>
-                <option<?php if ( in_array( $cat->slug, $value, true ) ) : ?> selected="selected"<?php endif; ?> value="<?php echo $cat->slug ?>">
+                <option<?php if ( in_array( $cat->slug, $value, true ) ) : ?> selected="selected"<?php endif; ?> value="<?php echo esc_attr( $cat->slug ) ?>">
                     <?php
                     if ($hierarchy && $i > 2) {
                         echo str_repeat('&nbsp;', ($i - 2) * 3);
                     }
                     ?>
-                    <?php echo $cat->name; ?>
-                    <?php if ($show_count): ?> &nbsp;(<?php echo $cat->count ?>)<?php endif; ?>
+                    <?php echo esc_html( $cat->name ); ?>
+                    <?php if ($show_count): ?> &nbsp;(<?php echo (int) $cat->count ?>)<?php endif; ?>
                 </option>
                 <?php if ($hierarchy && !empty($cats[$cat->term_id])): ?>
                     <?php $this->category_walker($cats[$cat->term_id], $cats, $type, $args, $value, $hide_empty, $lang, $i); ?>
                 <?php endif; ?>
             <?php else: ?>
-                <li class="<?php echo "wpf_{$cat->taxonomy}_{$cat->term_id}"; ?>">
+                <li class="<?php echo esc_attr( "wpf_{$cat->taxonomy}_{$cat->term_id}" ); ?>">
                     <?php if ('link' === $args['show_as']): ?>
                         <?php if (strpos($type, 'pa_') !== 0 && in_array( $cat->slug, $value, true ) ): ?>
-                            <span class="wpf_selected"><?php echo $cat->name ?></span>
+                            <span class="wpf_selected"><?php echo esc_html( $cat->name ) ?></span>
                         <?php else: ?>
                             <?php if (strpos($type, 'pa_') === 0): ?>
-                                <a class="wpf_pa_link" href="<?php echo get_term_link($cat->term_id, $cat->taxonomy); ?>">
-                                    <input <?php if (in_array($cat->slug, $value,true)): ?>checked="checked"<?php endif; ?> type="radio" value="<?php echo $cat->slug ?>" name="<?php echo $name ?>" />
-                                    <span><?php echo $cat->name ?></span>
+                                <a class="wpf_pa_link" href="<?php echo esc_url( get_term_link($cat->term_id, $cat->taxonomy) ); ?>">
+                                    <input <?php if (in_array($cat->slug, $value,true)): ?>checked="checked"<?php endif; ?> type="radio" value="<?php echo esc_attr( $cat->slug ) ?>" name="<?php echo esc_attr( $name ) ?>" />
+                                    <span><?php echo esc_html( $cat->name ) ?></span>
                                 </a>
                             <?php else: ?>
-                                <a href="<?php echo get_term_link($cat->term_id, $cat->taxonomy); ?>">
-                                    <?php echo $cat->name ?>
+                                <a href="<?php echo esc_url( get_term_link($cat->term_id, $cat->taxonomy) ); ?>">
+                                    <?php echo esc_html( $cat->name ) ?>
                                 </a>
                             <?php endif; ?>
                         <?php endif; ?>
@@ -1354,17 +1576,17 @@ class WPF_Form {
 							}
 						}
                         ?>
-                        <input <?php if ( in_array( $cat->slug, $value, true ) ): ?>checked="checked"<?php endif; ?> id="wpf_<?php echo $this->themplate_id ?>_<?php echo $cat->term_id ?>" type="<?php echo $args['show_as'] ?>" name="<?php echo $name; ?>[]" value="<?php echo $cat->slug ?>" />
+                        <input <?php if ( in_array( $cat->slug, $value, true ) ): ?>checked="checked"<?php endif; ?> id="wpf_<?php echo esc_attr( $this->themplate_id ) ?>_<?php echo esc_attr( $cat->term_id ) ?>" type="<?php echo esc_attr( $args['show_as'] ) ?>" name="<?php echo esc_attr( $name ); ?>[]" value="<?php echo esc_attr( $cat->slug ) ?>" />
                         <label <?php if (($color && ! empty( $color_bg ) ) || ! empty( $image_bg ) ) : ?>
                                 style="
-                                    <?php if ( ! empty( $image_bg ) ) : ?>background-image: url(<?php echo $image_bg ?>);background-size: cover;<?php endif;?>
-                                    <?php if ( ! empty( $color_bg ) ) : ?>background-color:<?php echo $color_bg; ?>; <?php endif;?>
-                                    <?php if ( ! empty( $color_text ) ) : ?> color:<?php echo $color_text ?>;<?php endif; ?>"
+                                    <?php if ( ! empty( $image_bg ) ) : ?>background-image: url('<?php echo esc_url( $image_bg ) ?>');background-size: cover;<?php endif;?>
+                                    <?php if ( ! empty( $color_bg ) ) : ?>background-color:<?php echo esc_attr( $color_bg ); ?>; <?php endif;?>
+                                    <?php if ( ! empty( $color_text ) ) : ?> color:<?php echo esc_attr( $color_text ) ?>;<?php endif; ?>"
                                <?php endif; ?>
-                                for="wpf_<?php echo $this->themplate_id ?>_<?php echo $cat->term_id ?>">
-                            <?php if ($show_label || !$color): ?><?php echo $label ?><?php else: ?><i></i><span class="screen-reader-text"><?php echo $cat->slug ?></span><?php endif; ?>
+                                for="wpf_<?php echo esc_attr( $this->themplate_id ) ?>_<?php echo esc_attr( $cat->term_id ) ?>">
+                            <?php if ($show_label || !$color): ?><?php echo esc_html( $label ) ?><?php else: ?><i></i><span class="screen-reader-text"><?php echo esc_html( $cat->slug ) ?></span><?php endif; ?>
                             <?php if(!empty($args['tooltip'])): ?>
-                            <span class="wpf_tooltip"><?php echo $label ?></span>
+                            <span class="wpf_tooltip"><?php echo esc_html( $label ) ?></span>
                             <?php endif; ?>
                         </label>
                     <?php endif; ?>
