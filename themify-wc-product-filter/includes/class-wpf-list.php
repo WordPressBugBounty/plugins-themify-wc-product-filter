@@ -149,7 +149,7 @@ class WPF_List_Table extends WP_List_Table {
         //Build row actions
         $actions = array(
             'edit' => sprintf(
-                '<a title="%1$s" href="%2$s" class="wpf_lightbox wpf_edit">%3$s</a>',sprintf( esc_attr__('Edit Product Filter %s','wpf'), esc_attr( $item['name'] ) ), add_query_arg(array('action'=>'wpf_edit','nonce'=>$nonce_edit,'slug'=>$item['slug']),  admin_url('admin-ajax.php')), __('Edit', 'wpf')
+                '<a title="%1$s" href="%2$s" class="wpf_lightbox wpf_edit" data-id="%4$s">%3$s</a>',sprintf( esc_attr__('Edit Product Filter %s','wpf'), esc_attr( $item['name'] ) ), add_query_arg(array('action'=>'wpf_edit','nonce'=>$nonce_edit,'slug'=>$item['slug']),  admin_url('admin-ajax.php')), __('Edit', 'wpf'), esc_attr( $item['slug'] )
             ),
             'export' => sprintf(
                 '<a title="%1$s" href="%2$s" class="wpf_export">%3$s</a>',sprintf(esc_attr__('Export Product Filter %s','wpf'), esc_attr( $item['name'] ) ), add_query_arg(array( 'page' => $page, 'action' => 'wpf_export', 'slug' => $item['slug'], 'nonce' => $nonce_export ),  admin_url('admin.php')), __('Export', 'wpf')

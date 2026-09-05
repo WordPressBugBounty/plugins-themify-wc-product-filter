@@ -100,12 +100,15 @@ class Themify_WPF_Plugin_Compat_themifyBuilderPro {
 	 * @return array
 	 */
 	public static function module_container_props( array $props, array $fields_args, string $mod_name, string $element_id ): array {
-		$slug = WPF_Public::request_wpf_slug();
-		if ( '' === $slug ) {
+		if ( $mod_name !== 'advanced-products' && $mod_name !== 'archive-products' ) {
+			return $props;
+		}
+		if ( ! class_exists( 'WPF_Public', false ) ) {
 			return $props;
 		}
 
-		if ( $mod_name !== 'advanced-products' && $mod_name !== 'archive-products' ) {
+		$slug = WPF_Public::request_wpf_slug();
+		if ( '' === $slug ) {
 			return $props;
 		}
 

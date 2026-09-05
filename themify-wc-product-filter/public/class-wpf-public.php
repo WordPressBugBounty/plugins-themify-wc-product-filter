@@ -475,6 +475,25 @@ class WPF_Public
 	}
 
 	/**
+	 * Frontend "Edit Product Filter" link for admins (same idea as PTB search).
+	 *
+	 * @return bool
+	 */
+	public static function show_edit_link() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return false;
+		}
+		if ( class_exists( 'Themify_Builder_Model', false ) ) {
+			if ( Themify_Builder_Model::is_front_builder_activate()
+				|| ( isset( $_REQUEST['action'] ) && in_array( $_REQUEST['action'], array( 'tb_render_element', 'tb_load_module_partial', 'tb_render_element_shortcode', 'render_element_shortcode_ajaxify' ), true ) )
+			) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
 	 * First scalar string from a request value (arrays from ?foo[]= are rejected for string fields).
 	 *
 	 * @param mixed $v

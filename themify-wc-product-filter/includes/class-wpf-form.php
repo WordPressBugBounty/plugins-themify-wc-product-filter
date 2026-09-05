@@ -969,6 +969,9 @@ class WPF_Form {
 			data-infinitybuffer="<?php echo esc_attr( $infinitybuffer ); ?>"
 			data-wpf-tax-relation="<?php echo esc_attr( isset( $template['data']['tax_relation'] ) ? $template['data']['tax_relation'] : 'or' ); ?>"
 		>
+			<?php if ( WPF_Public::show_edit_link() && $this->themplate_id ) : ?>
+				<div class="wpf_edit_link"><a href="<?php echo esc_url( admin_url( 'admin.php?page=wpf_search#' . $this->themplate_id ) ); ?>"><?php echo wp_kses( __( 'Edit <span>Product Filter</span>', 'wpf' ), array( 'span' => array() ) ); ?></a></div>
+			<?php endif; ?>
             <input type="hidden" name="wpf" value="<?php echo esc_attr( $this->themplate_id ) ?>" />
 			<input type="hidden" name="orderby" value="" />
 			<input type="hidden" name="wpf_cols" value="" />
@@ -1317,11 +1320,6 @@ class WPF_Form {
 								$t_obj->count = isset( $facet_counts_override[ $t_obj->term_id ] )
 									? (int) $facet_counts_override[ $t_obj->term_id ]
 									: 0;
-							}
-							$applied_custom_and_counts = true;
-						} elseif ( null === $facet_counts_override ) {
-							foreach ( $categories as $t_obj ) {
-								$t_obj->count = 0;
 							}
 							$applied_custom_and_counts = true;
 						}

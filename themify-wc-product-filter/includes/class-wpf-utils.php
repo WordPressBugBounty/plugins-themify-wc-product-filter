@@ -493,10 +493,11 @@ class WPF_Utils {
 			<?php
 			endif;
 		} else if ( $type === 'pagination' ) {
+			$base = remove_query_arg( array( 'wpf_ajax', 'append' ) );
 			$args = array(
 				'total'   => wc_get_loop_prop( 'total_pages' ),
 				'current' => wc_get_loop_prop( 'current_page' ),
-				'base'    => esc_url_raw( add_query_arg( 'wpf_page', '%#%', false ) ),
+				'base'    => esc_url_raw( add_query_arg( 'wpf_page', '%#%', $base ) ),
 				'format'  => '?wpf_page=%#%',
 			);
 			wc_get_template( 'loop/pagination.php', $args );
@@ -787,11 +788,12 @@ class WPF_Utils {
 	}
 
 	/**
-	 * Conditional counts between taxonomies (AND): product pool respects all active facets (correct OR-of-terms within taxonomy + AND across taxonomies).
+	 * Conditional counts between taxonomies (AND): product pool respects other active facets.
+	 * OR fields exclude themselves from the pool so sibling terms stay available.
 	 *
 	 * @param array<string,mixed> $request
 	 * @param array               $form Contains layout & data keys.
-	 * @param string              $facet_type Unused; kept for filter compatibility.
+	 * @param string              $facet_type Layout key of the field being counted.
 	 * @param string              $taxonomy
 	 * @param int[]               $term_ids
 	 * @return array<int,int>|null
@@ -801,7 +803,7 @@ class WPF_Utils {
 		if ( $budget < 200 ) {
 			$budget = 200;
 		}
-		if ( empty( $request['wpf'] ) || empty( $form['layout'] ) || empty( $term_ids ) ) {
+		if ( empty( $request['wpf'] ) || ! is_scalar( $request['wpf'] ) || empty( $form['layout'] ) || empty( $term_ids ) ) {
 			return null;
 		}
 
@@ -812,9 +814,27 @@ class WPF_Utils {
 		}
 
 		$normalized = self::normalize_request_for_and_facet_pool( $request );
-		if ( empty( $normalized['wpf'] ) && ! empty( $request['wpf'] ) ) {
-			$normalized['wpf'] = sanitize_key( $request['wpf'] );
+		if ( empty( $normalized['wpf'] ) && ! empty( $request['wpf'] ) && is_scalar( $request['wpf'] ) ) {
+			$normalized['wpf'] = sanitize_key( (string) $request['wpf'] );
 		}
+
+		$field_logic = 'or';
+		if ( ! empty( $form['layout'][ $facet_type ] ) && is_array( $form['layout'][ $facet_type ] )
+			&& ! empty( $form['layout'][ $facet_type ]['logic'] ) ) {
+			$field_logic = strtolower( (string) $form['layout'][ $facet_type ]['logic'] );
+		}
+		$strip_current = apply_filters(
+			'wpf_and_facet_strip_current_field',
+			'and' !== $field_logic,
+			$facet_type,
+			$field_logic,
+			$form,
+			$request
+		);
+		if ( $strip_current ) {
+			$normalized = self::strip_request_fields_for_facets( $normalized, $form['layout'], $facet_type );
+		}
+
 		$key_bits = $normalized;
 		self::recursive_ksort( $key_bits );
 		$pool_key = sanitize_key( (string) $request['wpf'] ) . '|' . md5( (string) wp_json_encode( $key_bits ) ) . '|' . $budget;
@@ -846,90 +866,116 @@ class WPF_Utils {
 			}
 		}
 
-		$query_args = $public->parse_query( $normalized, $form, true );
+		WPF_Public::set_silent_parse_query( true );
+		try {
+			$query_args = $public->parse_query( $normalized, $form, true );
+		} finally {
+			WPF_Public::set_silent_parse_query( false );
+		}
 		if ( empty( $query_args ) || ! is_array( $query_args ) ) {
 			return null;
 		}
 
+		$query_args['paged'] = 1;
 		unset( $query_args['offset'] );
 
-		$measure = wp_parse_args(
-			array(
-				'posts_per_page' => 1,
-				'fields'         => 'ids',
-				'no_found_rows'  => false,
-			),
-			$query_args
-		);
-
-		$m     = new WP_Query( $measure );
-		$found = (int) $m->found_posts;
-		wp_reset_postdata();
-
-		if ( $found < 1 ) {
-			self::$and_facet_pool_cache[ $pool_key ] = array( 'empty' => true );
-			return array_fill_keys( array_map( 'intval', $term_ids ), 0 );
-		}
-		if ( $found > $budget ) {
-			self::$and_facet_pool_cache[ $pool_key ] = array(
-				'over_budget' => true,
-				'found'       => $found,
-			);
-			return apply_filters(
-				'wpf_and_facet_term_counts_over_budget',
-				null,
-				$facet_type,
-				$taxonomy,
-				$term_ids,
-				$found,
-				$budget,
-				$normalized,
-				$form
-			);
-		}
-
-		$list               = array();
-		$post_batch         = apply_filters( 'wpf_and_facet_id_batch_size', 650 );
-		$post_batch         = max( 100, absint( $post_batch ) );
-		$gather_base        = wp_parse_args(
-			array(
-				'posts_per_page'           => $post_batch,
-				'fields'                   => 'ids',
-				'no_found_rows'            => true,
-				'update_post_term_cache'   => false,
-				'update_post_meta_cache'   => false,
-			),
-			$query_args
-		);
-		unset( $gather_base['offset'] );
-
-		$page_num           = 1;
-		$effective_target   = min( $found, $budget );
-		while ( $page_num <= 250 && count( $list ) < $effective_target ) {
-			$page_args = wp_parse_args(
-				array(
-					'paged'          => $page_num,
-					'posts_per_page' => $post_batch,
-				),
-				$gather_base
-			);
-
-			$qq             = new WP_Query( $page_args );
-			$got_products   = empty( $qq->posts ) ? 0 : count( $qq->posts );
-
-			foreach ( array_map( 'intval', $qq->posts ) as $pid ) {
-				if ( $pid > 0 ) {
-					$list[ $pid ] = 1;
+		$force_ppp = static function ( $q ) {
+			if ( $q instanceof WP_Query && $q->get( 'wpf_facet_pool' ) ) {
+				$ppp = (int) $q->get( 'wpf_facet_pool' );
+				if ( $ppp > 0 ) {
+					$q->set( 'posts_per_page', $ppp );
+					$q->set( 'nopaging', false );
+					$q->set( 'offset', '' );
 				}
 			}
+		};
+		add_action( 'pre_get_posts', $force_ppp, 999 );
+		$list = array();
+
+		try {
+			$measure = wp_parse_args(
+				array(
+					'posts_per_page' => 1,
+					'paged'          => 1,
+					'fields'         => 'ids',
+					'no_found_rows'  => false,
+					'wpf_facet_pool' => 1,
+				),
+				$query_args
+			);
+
+			$m     = new WP_Query( $measure );
+			$found = (int) $m->found_posts;
 			wp_reset_postdata();
-			if ( $got_products < 1 ) {
-				break;
+
+			if ( $found < 1 ) {
+				self::$and_facet_pool_cache[ $pool_key ] = array( 'empty' => true );
+				return array_fill_keys( array_map( 'intval', $term_ids ), 0 );
 			}
-			if ( $got_products < $post_batch ) {
-				break;
+			if ( $found > $budget ) {
+				self::$and_facet_pool_cache[ $pool_key ] = array(
+					'over_budget' => true,
+					'found'       => $found,
+				);
+				return apply_filters(
+					'wpf_and_facet_term_counts_over_budget',
+					null,
+					$facet_type,
+					$taxonomy,
+					$term_ids,
+					$found,
+					$budget,
+					$normalized,
+					$form
+				);
 			}
-			++$page_num;
+
+			$list             = array();
+			$post_batch       = apply_filters( 'wpf_and_facet_id_batch_size', 650 );
+			$post_batch       = max( 100, absint( $post_batch ) );
+			$gather_base      = wp_parse_args(
+				array(
+					'posts_per_page'         => $post_batch,
+					'paged'                  => 1,
+					'fields'                 => 'ids',
+					'no_found_rows'          => true,
+					'update_post_term_cache' => false,
+					'update_post_meta_cache' => false,
+					'wpf_facet_pool'         => $post_batch,
+				),
+				$query_args
+			);
+			unset( $gather_base['offset'] );
+
+			$page_num         = 1;
+			$effective_target = min( $found, $budget );
+			while ( $page_num <= 250 && count( $list ) < $effective_target ) {
+				$page_args = wp_parse_args(
+					array(
+						'paged'          => $page_num,
+						'posts_per_page' => $post_batch,
+						'wpf_facet_pool' => $post_batch,
+					),
+					$gather_base
+				);
+				unset( $page_args['offset'] );
+
+				$qq           = new WP_Query( $page_args );
+				$got_products = empty( $qq->posts ) ? 0 : count( $qq->posts );
+
+				foreach ( array_map( 'intval', $qq->posts ) as $pid ) {
+					if ( $pid > 0 ) {
+						$list[ $pid ] = 1;
+					}
+				}
+				wp_reset_postdata();
+				if ( $got_products < 1 ) {
+					break;
+				}
+				++$page_num;
+			}
+		} finally {
+			remove_action( 'pre_get_posts', $force_ppp, 999 );
 		}
 
 		$ids_sorted = array_values( array_map( 'intval', array_keys( $list ) ) );
