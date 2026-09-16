@@ -458,6 +458,7 @@ class WPF_Utils {
 			|| isset( $query->query['tf_wc_query'] ) // Themify WooCommerce module
 			|| ( isset( $query->query['tbp_aap'] ) && $query->query['post_type'] === 'product' ) // Themify Builder Pro modules
 			|| ( isset( $query->query['themify_wpf'] ) && $query->query['themify_wpf'] === true ) // custom flag in query_args
+			|| ! empty( $query->et_pb_shop_query ) // Divi 4 Shop / Divi 5 Woo Products
 		;
 
 		/**
@@ -471,6 +472,120 @@ class WPF_Utils {
 		$is = apply_filters( 'wpf_is_product_query', $is, $query );
 
 		return $is;
+	}
+
+	/**
+	 * Combine two tax/meta query arrays with AND so an existing scope is kept.
+	 *
+	 * Used when WPF filters a query that already has constraints (Divi Woo Products
+	 * product_cat, Woo visibility, etc.). Replacing the whole clause would drop them.
+	 *
+	 * @param array $existing
+	 * @param array $incoming
+	 * @return array
+	 */
+	public static function and_merge_query_clauses( $existing, $incoming ) {
+		$existing = self::wrap_query_clauses( $existing );
+		$incoming = self::wrap_query_clauses( $incoming );
+		if ( empty( $existing ) ) {
+			return $incoming;
+		}
+		if ( empty( $incoming ) ) {
+			return $existing;
+		}
+
+		return array(
+			'relation' => 'AND',
+			$existing,
+			$incoming,
+		);
+	}
+
+	/**
+	 * @param mixed $clauses
+	 * @return array
+	 */
+	public static function wrap_query_clauses( $clauses ) {
+		if ( empty( $clauses ) || ! is_array( $clauses ) ) {
+			return array();
+		}
+
+		$has_clause = false;
+		foreach ( $clauses as $k => $clause ) {
+			if ( 'relation' === $k || ! is_array( $clause ) ) {
+				continue;
+			}
+			$has_clause = true;
+			break;
+		}
+		if ( ! $has_clause ) {
+			return array();
+		}
+
+		if ( ! isset( $clauses['relation'] ) ) {
+			$clauses['relation'] = 'AND';
+		} else {
+			$clauses['relation'] = 'OR' === strtoupper( (string) $clauses['relation'] ) ? 'OR' : 'AND';
+		}
+
+		return $clauses;
+	}
+
+	/**
+	 * @param mixed  $tax_query
+	 * @param string $taxonomy
+	 * @return bool
+	 */
+	public static function tax_query_has_taxonomy( $tax_query, $taxonomy ) {
+		if ( empty( $tax_query ) || ! is_array( $tax_query ) || '' === (string) $taxonomy ) {
+			return false;
+		}
+		foreach ( $tax_query as $k => $clause ) {
+			if ( 'relation' === $k || ! is_array( $clause ) ) {
+				continue;
+			}
+			if ( ! empty( $clause['taxonomy'] ) && $clause['taxonomy'] === $taxonomy ) {
+				return true;
+			}
+			if ( empty( $clause['taxonomy'] ) && self::tax_query_has_taxonomy( $clause, $taxonomy ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Tax query already on $query, plus product_cat query var when that is the only scope.
+	 *
+	 * @param WP_Query $query
+	 * @return array
+	 */
+	public static function existing_tax_query_from_wp_query( $query ) {
+		$tax = array();
+		if ( $query instanceof WP_Query ) {
+			$tax = $query->get( 'tax_query' );
+			if ( empty( $tax ) && isset( $query->tax_query ) && is_object( $query->tax_query ) && ! empty( $query->tax_query->queries ) ) {
+				$tax = $query->tax_query->queries;
+			}
+		}
+		if ( ! is_array( $tax ) ) {
+			$tax = array();
+		}
+
+		$product_cat = $query instanceof WP_Query ? $query->get( 'product_cat' ) : '';
+		if ( ! empty( $product_cat ) && ! self::tax_query_has_taxonomy( $tax, 'product_cat' ) ) {
+			$terms = is_array( $product_cat ) ? $product_cat : array_filter( array_map( 'trim', explode( ',', (string) $product_cat ) ) );
+			if ( ! empty( $terms ) ) {
+				$first = reset( $terms );
+				$tax[] = array(
+					'taxonomy' => 'product_cat',
+					'field'    => is_numeric( $first ) ? 'term_id' : 'slug',
+					'terms'    => array_values( $terms ),
+				);
+			}
+		}
+
+		return $tax;
 	}
 
 	/**

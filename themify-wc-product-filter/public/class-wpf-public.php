@@ -34,7 +34,6 @@ class WPF_Public
 	private static $result_page = null;
 	private $shortcode_id = '';
 	private $pagination = false;
-	private $post_count;
 	private $append = false;
 	private $not_found = false;
 	private $custom_cols;
@@ -184,15 +183,10 @@ class WPF_Public
 				if ( ( !empty( $data['result_type'] ) && $data['result_type'] === 'same_page' ) || self::$result_page == $data['page'] ) {
 					self::load_wc_scripts();
 					add_filter( 'body_class', array( $this, 'body_class' ), 10, 1 );
-					if ( ! ( class_exists( 'Themify_WPF_Plugin_Compat_themifyBuilderPro', false ) && Themify_WPF_Plugin_Compat_themifyBuilderPro::should_render_with_builder_pro() ) ) {
-						self::$result = $this->get_result( $_REQUEST, $forms[ $slug ] );
+					if ( ! $this->catalog_has_native_loop()
+						&& ! ( class_exists( 'Themify_WPF_Plugin_Compat_themifyBuilderPro', false ) && Themify_WPF_Plugin_Compat_themifyBuilderPro::should_render_with_builder_pro() ) ) {
+						self::$result = $this->get_result( wp_unslash( $_REQUEST ), $forms[ $slug ] );
 						if ( is_singular( 'product' ) ) {
-							add_filter( 'wc_get_template', array( $this, 'filter_not_found' ), 30, 5 );
-						} elseif ( is_woocommerce() ) {
-							global $wp_query;
-							$this->post_count = $wp_query->post_count;
-							$wp_query->post_count = 0;
-							add_action( 'woocommerce_after_main_content', array( $this, 'refresh_post_count' ), 1 );
 							add_filter( 'wc_get_template', array( $this, 'filter_not_found' ), 30, 5 );
 						}
 					}
@@ -202,6 +196,17 @@ class WPF_Public
 		if ( is_woocommerce() ) {
 			add_action( 'woocommerce_before_main_content', array( $this, 'result_container' ), 100 );
 		}
+	}
+
+	/**
+	 * Shop and product taxonomy archives already render a product loop.
+	 * Filters are applied in change_shop_query(); get_result() during wp_head
+	 * would rebuild that loop and blank the native catalog.
+	 *
+	 * @return bool
+	 */
+	private function catalog_has_native_loop() {
+		return is_shop() || is_product_taxonomy();
 	}
 
 	public function result_container( $content = '' ) {
@@ -257,11 +262,6 @@ class WPF_Public
 			$cl .= ' wpf-hide-pagination';
 		}
 		echo '<div class="' . $cl . '">';
-	}
-
-	public function refresh_post_count() {
-		global $wp_query;
-		$wp_query->post_count = $this->post_count;
 	}
 
 	public function filter_not_found( $located, $template_name, $args, $template_path, $default_path ) {
@@ -1247,6 +1247,24 @@ class WPF_Public
 						'field'    => 'term_id',
 						'terms'    => $queried_object->term_id,
 					);
+				}
+			}
+
+			$existing_tax = WPF_Utils::existing_tax_query_from_wp_query( $query );
+			if ( ! empty( $existing_tax ) ) {
+				if ( ! empty( $args['tax_query'] ) && is_array( $args['tax_query'] ) ) {
+					$args['tax_query'] = WPF_Utils::and_merge_query_clauses( $existing_tax, $args['tax_query'] );
+				} else {
+					unset( $args['tax_query'] );
+				}
+			}
+
+			$existing_meta = $query->get( 'meta_query' );
+			if ( ! empty( $existing_meta ) && is_array( $existing_meta ) ) {
+				if ( ! empty( $args['meta_query'] ) && is_array( $args['meta_query'] ) ) {
+					$args['meta_query'] = WPF_Utils::and_merge_query_clauses( $existing_meta, $args['meta_query'] );
+				} else {
+					unset( $args['meta_query'] );
 				}
 			}
 
