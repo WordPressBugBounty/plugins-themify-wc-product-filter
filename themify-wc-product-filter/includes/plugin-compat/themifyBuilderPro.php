@@ -43,6 +43,22 @@ class Themify_WPF_Plugin_Compat_themifyBuilderPro {
 
 		$wpf_args = self::narrow_taxonomy_archive( $wpf_args );
 
+		if ( is_tax( get_object_taxonomies( 'product' ) ) ) {
+			$archive_term = get_queried_object();
+			if ( isset( $archive_term->taxonomy )
+				&& ! empty( $wpf_args['tax_query'] )
+				&& WPF_Utils::tax_query_has_taxonomy( $wpf_args['tax_query'], $archive_term->taxonomy ) ) {
+				if ( 'product_cat' === $archive_term->taxonomy ) {
+					unset( $query_args['product_cat'] );
+				} elseif ( 'product_tag' === $archive_term->taxonomy ) {
+					unset( $query_args['product_tag'] );
+				}
+				if ( ! empty( $query_args['tax_query'] ) ) {
+					$query_args['tax_query'] = WPF_Utils::remove_taxonomy_from_tax_query( $query_args['tax_query'], $archive_term->taxonomy );
+				}
+			}
+		}
+
 		$query_args = array_merge( $query_args, $wpf_args, $preserve );
 		$query_args['tbp_aap']     = true;
 		$query_args['wpf_merged']  = true;

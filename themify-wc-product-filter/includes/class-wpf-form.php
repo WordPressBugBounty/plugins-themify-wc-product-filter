@@ -1262,16 +1262,17 @@ class WPF_Form {
 					? WPF_Utils::get_active_product_cat_archive_term_id()
 					: 0;
 
-				if ( ! empty( $args['arch_ctx'] ) && $archive_cat_tid > 0 ) {
+				if ( $global_tax_is_and && ! empty( $args['arch_ctx'] ) && $archive_cat_tid > 0 ) {
 					$q['child_of'] = $archive_cat_tid;
 				} elseif (
-					$archive_cat_tid > 0
+					$global_tax_is_and
+					&& $archive_cat_tid > 0
 					&& apply_filters( 'wpf_category_facet_restrict_to_archive_descendants', true, $args, $data )
 				) {
 					/*
 					 * Limit category choices to this archive subtree (current term + descendants).
 					 * Sibling categories stay out of the list even when products are multi-assigned OR tags narrow the pool.
-					 * OR tax_relation formerly skipped this branch (only AND used child_of), which surfaced Men/etc. again after AJAX.
+					 * With OR tax_relation, leave all categories available, including after AJAX refresh.
 					 */
 					$subtree = WPF_Utils::get_product_cat_subtree_term_ids( $archive_cat_tid );
 					if ( ! empty( $subtree ) ) {

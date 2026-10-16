@@ -555,6 +555,58 @@ class WPF_Utils {
 	}
 
 	/**
+	 * Remove one taxonomy so a filter on it replaces the archive scope.
+	 *
+	 * @param mixed  $tax_query
+	 * @param string $taxonomy
+	 * @return array
+	 */
+	public static function remove_taxonomy_from_tax_query( $tax_query, $taxonomy ) {
+		if ( ! is_array( $tax_query ) || '' === (string) $taxonomy ) {
+			return array();
+		}
+		$out = array();
+		foreach ( $tax_query as $k => $clause ) {
+			if ( 'relation' === $k ) {
+				$out['relation'] = $clause;
+				continue;
+			}
+			if ( ! is_array( $clause ) ) {
+				continue;
+			}
+			if ( ! empty( $clause['taxonomy'] ) ) {
+				if ( $clause['taxonomy'] !== $taxonomy ) {
+					$out[] = $clause;
+				}
+				continue;
+			}
+			$nested = self::remove_taxonomy_from_tax_query( $clause, $taxonomy );
+			if ( self::tax_query_clause_count( $nested ) > 0 ) {
+				$out[] = $nested;
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * @param array $tax_query
+	 * @return int
+	 */
+	private static function tax_query_clause_count( $tax_query ) {
+		if ( ! is_array( $tax_query ) ) {
+			return 0;
+		}
+		$count = 0;
+		foreach ( $tax_query as $k => $clause ) {
+			if ( 'relation' === $k || ! is_array( $clause ) ) {
+				continue;
+			}
+			++$count;
+		}
+		return $count;
+	}
+
+	/**
 	 * Tax query already on $query, plus product_cat query var when that is the only scope.
 	 *
 	 * @param WP_Query $query
@@ -654,6 +706,9 @@ class WPF_Utils {
 	 */
 	public static function wc_get_filtered_term_product_counts( array $term_ids, $taxonomy, $query_type = 'and' ) {
 		if ( ! function_exists( 'wc_get_container' ) || empty( $term_ids ) ) {
+			return null;
+		}
+		if ( ! function_exists( 'taxonomy_is_product_attribute' ) || ! taxonomy_is_product_attribute( $taxonomy ) ) {
 			return null;
 		}
 		$query_type = ( 'or' === strtolower( (string) $query_type ) ) ? 'or' : 'and';

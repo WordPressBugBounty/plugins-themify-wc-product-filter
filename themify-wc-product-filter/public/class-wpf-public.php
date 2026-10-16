@@ -97,6 +97,7 @@ class WPF_Public
 			add_filter( 'shortcode_atts_products', array( $this, 'shortcode_atts_products' ) );
 
 			add_action( 'pre_get_posts', array( $this, 'change_shop_query' ), 99 );
+			add_action( 'woocommerce_before_shop_loop', array( $this, 'keep_catalog_loop_layout' ), 11 );
 			add_filter( 'wc_get_template', array( $this, 'hide_templates' ), 100, 5 );
             remove_action( 'wp_head', 'rel_canonical' ); 
             add_action( 'wp_head', array( $this, 'canonical_link' ) );
@@ -1251,6 +1252,14 @@ class WPF_Public
 			}
 
 			$existing_tax = WPF_Utils::existing_tax_query_from_wp_query( $query );
+			if ( is_tax( get_object_taxonomies( 'product' ) ) ) {
+				$archive_term = get_queried_object();
+				if ( isset( $archive_term->taxonomy )
+					&& ! empty( $args['tax_query'] )
+					&& WPF_Utils::tax_query_has_taxonomy( $args['tax_query'], $archive_term->taxonomy ) ) {
+					$existing_tax = WPF_Utils::remove_taxonomy_from_tax_query( $existing_tax, $archive_term->taxonomy );
+				}
+			}
 			if ( ! empty( $existing_tax ) ) {
 				if ( ! empty( $args['tax_query'] ) && is_array( $args['tax_query'] ) ) {
 					$args['tax_query'] = WPF_Utils::and_merge_query_clauses( $existing_tax, $args['tax_query'] );
@@ -1325,6 +1334,20 @@ class WPF_Public
 	function products_shortcode_pagination() {
 		remove_action( 'woocommerce_shortcode_after_products_loop', array( $this, 'products_shortcode_pagination' ) ); // deactivate self
 		WPF_Utils::pagination( $this->pagination );
+	}
+
+	/**
+	 * Keep Shoppe's archive loop classes. A shortcode earlier in the filtered request
+	 * leaves is_shortcode set, and the theme swaps grid3/infinite for the shop grid.
+	 */
+	public function keep_catalog_loop_layout() {
+		if ( ! is_shop() && ! is_product_taxonomy() ) {
+			return;
+		}
+		if ( function_exists( 'wc_set_loop_prop' ) ) {
+			wc_set_loop_prop( 'is_shortcode', false );
+			wc_set_loop_prop( 'name', '' );
+		}
 	}
 
 	function change_shop_query( $query ) {
