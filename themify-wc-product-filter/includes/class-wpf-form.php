@@ -69,6 +69,42 @@ class WPF_Form {
                 <?php endforeach; ?>
             </div>
         </div>
+		<?php
+		$mobile_layout = isset( $data['mobile_layout'] ) ? $data['mobile_layout'] : 'default';
+		if ( ! in_array( $mobile_layout, array( 'default', 'horizontal', 'sticky' ), true ) ) {
+			$mobile_layout = 'default';
+		}
+		$sticky_position = ( isset( $data['sticky_position'] ) && 'left' === $data['sticky_position'] ) ? 'left' : 'right';
+		?>
+        <div class="wpf_lightbox_row wpf_changed">
+            <div class="wpf_lightbox_label"><label for="wpf_mobile_layout"><?php _e( 'Mobile Layout', 'wpf' ); ?></label></div>
+            <div class="wpf_lightbox_input">
+                <div class="wpf_custom_select">
+                    <select name="mobile_layout" id="wpf_mobile_layout">
+                        <option value="default" <?php selected( $mobile_layout, 'default' ); ?>><?php _e( 'Default', 'wpf' ); ?></option>
+                        <option value="horizontal" <?php selected( $mobile_layout, 'horizontal' ); ?>><?php _e( 'Horizontal', 'wpf' ); ?></option>
+                        <option value="sticky" <?php selected( $mobile_layout, 'sticky' ); ?>><?php _e( 'Sticky', 'wpf' ); ?></option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <div class="wpf_lightbox_row wpf_mobile_breakpoint">
+            <div class="wpf_lightbox_label"><label for="wpf_mobile_breakpoint"><?php _e( 'Mobile Breakpoint', 'wpf' ); ?></label></div>
+            <div class="wpf_lightbox_input">
+                <input type="number" min="1" step="1" name="mobile_breakpoint" id="wpf_mobile_breakpoint" placeholder="680" value="<?php echo ! empty( $data['mobile_breakpoint'] ) ? esc_attr( absint( $data['mobile_breakpoint'] ) ) : ''; ?>" /> <?php _e( 'px', 'wpf' ); ?>
+            </div>
+        </div>
+        <div class="wpf_lightbox_row wpf_sticky_position" <?php if ( 'sticky' !== $mobile_layout ) : ?>style="display:none"<?php endif; ?>>
+            <div class="wpf_lightbox_label"><label for="wpf_sticky_position"><?php _e( 'Sticky Position', 'wpf' ); ?></label></div>
+            <div class="wpf_lightbox_input">
+                <div class="wpf_custom_select">
+                    <select name="sticky_position" id="wpf_sticky_position">
+                        <option value="right" <?php selected( $sticky_position, 'right' ); ?>><?php _e( 'Right', 'wpf' ); ?></option>
+                        <option value="left" <?php selected( $sticky_position, 'left' ); ?>><?php _e( 'Left', 'wpf' ); ?></option>
+                    </select>
+                </div>
+            </div>
+        </div>
         <div class="wpf_lightbox_row">
             <div class="wpf_lightbox_label"><label for="wpf_empty_fields"><?php _e('Empty Fields', 'wpf'); ?></label></div>
             <div class="wpf_lightbox_input">
@@ -193,7 +229,7 @@ class WPF_Form {
         <div class="wpf_lightbox_row">
             <div class="wpf_lightbox_label">
 				<label for="wpf_tax_relation_or">
-					<?php _e('Logical Relationship Between Taxonomies', 'wpf'); ?>
+					<?php _e( 'Taxonomy Logic', 'wpf' ); ?>
 					<small class="wpf_help_icon">
 						<span><?php _e( '(?)', 'wpf' ); ?></span>
 						<div class="wpf_help_content">
@@ -268,6 +304,15 @@ class WPF_Form {
                     }
                     ?>
                 </label>
+            </div>
+        </div>
+        <div class="wpf_lightbox_row">
+            <div class="wpf_lightbox_label">
+                <label for="wpf_result_target"><?php _e( 'Target CSS Class/ID', 'wpf' ); ?></label>
+            </div>
+            <div class="wpf_lightbox_input">
+                <input type="text" name="result_target" id="wpf_result_target" class="widefat" value="<?php echo isset( $data['result_target'] ) ? esc_attr( $data['result_target'] ) : ''; ?>" placeholder=".shop-grid or #summer-products" />
+                <small><?php _e( 'Optional: Enter the CSS class or ID to display filter results inside a specific products wrapper.', 'wpf' ); ?></small>
             </div>
         </div>
         <div class="wpf_lightbox_row ">
@@ -409,10 +454,32 @@ class WPF_Form {
                 }
             }
 
-            $_keys = array( 'name', 'empty', 'group','reset_button', 'type', 'page', 'sort', 'pagination', 'posts_per_page', 'result', 'out_of_stock', 'scroll', 'result_type', 'tax_relation', 'pagination_type', 'infinitybuffer', 'variations' );
+            $_keys = array( 'name', 'empty', 'group','reset_button', 'type', 'page', 'sort', 'pagination', 'posts_per_page', 'result', 'out_of_stock', 'scroll', 'result_type', 'tax_relation', 'pagination_type', 'infinitybuffer', 'variations', 'mobile_layout', 'mobile_breakpoint', 'sticky_position' );
             foreach ($_keys as $k) {
                 if (!empty($post[$k])) {
                     $data[$themplate_id]['data'][$k] = sanitize_text_field( $post[$k] );
+                }
+            }
+            if ( isset( $data[ $themplate_id ]['data']['mobile_layout'] ) && ! in_array( $data[ $themplate_id ]['data']['mobile_layout'], array( 'default', 'horizontal', 'sticky' ), true ) ) {
+                unset( $data[ $themplate_id ]['data']['mobile_layout'] );
+            }
+            if ( isset( $data[ $themplate_id ]['data']['sticky_position'] ) && ! in_array( $data[ $themplate_id ]['data']['sticky_position'], array( 'left', 'right' ), true ) ) {
+                $data[ $themplate_id ]['data']['sticky_position'] = 'right';
+            }
+            if ( empty( $post['mobile_breakpoint'] ) ) {
+                unset( $data[ $themplate_id ]['data']['mobile_breakpoint'] );
+            } elseif ( isset( $data[ $themplate_id ]['data']['mobile_breakpoint'] ) ) {
+                $data[ $themplate_id ]['data']['mobile_breakpoint'] = (string) absint( $data[ $themplate_id ]['data']['mobile_breakpoint'] );
+                if ( '0' === $data[ $themplate_id ]['data']['mobile_breakpoint'] ) {
+                    unset( $data[ $themplate_id ]['data']['mobile_breakpoint'] );
+                }
+            }
+            if ( isset( $post['result_target'] ) ) {
+                $target = self::sanitize_result_target( $post['result_target'] );
+                if ( $target === '' ) {
+                    unset( $data[ $themplate_id ]['data']['result_target'] );
+                } else {
+                    $data[ $themplate_id ]['data']['result_target'] = $target;
                 }
             }
 
@@ -426,6 +493,22 @@ class WPF_Form {
             );
         }
         return $result;
+    }
+
+    /**
+     * @param mixed $value
+     * @return string
+     */
+    private static function sanitize_result_target( $value ) {
+        $value = is_string( $value ) ? trim( wp_strip_all_tags( wp_unslash( $value ) ) ) : '';
+        $value = preg_replace( '/\s+/', ' ', $value );
+        if ( strlen( $value ) > 200 ) {
+            $value = substr( $value, 0, 200 );
+        }
+        if ( $value === '' || ! preg_match( '/^[a-zA-Z0-9_\-\.#\s,:>=+~*\[\]\(\)\'"=]+$/', $value ) ) {
+            return '';
+        }
+        return $value;
     }
 
     /**
@@ -678,7 +761,7 @@ class WPF_Form {
                 <div class="wpf_back_active_module_row">
                     <div class="wpf_back_active_module_label">
                         <label>
-							<?php _e('Logic', 'wpf') ?>
+							<?php _e( 'Term Logic', 'wpf' ) ?>
 							<small class="wpf_help_icon">
 								<span><?php _e( '(?)', 'wpf' ); ?></span>
 								<div class="wpf_help_content">
@@ -811,7 +894,8 @@ class WPF_Form {
 		);
 		$sort_cmb      = WPF_Utils::get_all_field_types();
 		$is_horizontal = $template['data']['type'] === 'horizontal';
-		$is_group      = ! empty( $template['data']['group'] ) || $is_horizontal;
+		$mobile_layout = isset( $template['data']['mobile_layout'] ) ? $template['data']['mobile_layout'] : 'default';
+		$is_group      = ! empty( $template['data']['group'] ) || $is_horizontal || 'horizontal' === $mobile_layout;
 		$reset_btn     = ! empty( $template['data']['reset_button'] ) ? $template['data']['reset_button'] : 'no';
 		$reset         = ! empty( $template['data']['clear_label'] ) ? WPF_Utils::get_label( $template['data']['clear_label'] ) : '';
 		if ( empty( $reset ) ) {
@@ -836,8 +920,9 @@ class WPF_Form {
 			$view = trim( ob_get_clean() );
 			if ( $view || empty( $template['data']['empty'] ) ) {
 				echo '<div class="wpf_item wpf_item_' . esc_attr( $type ) . '">';
-				if ( 'submit' !== $type && ( $is_horizontal || empty( $module['hide_field'] ) ) ) {
-					echo '<div class="wpf_item_name">';
+				$mobile_name = 'horizontal' === $mobile_layout && ! $is_horizontal && ! empty( $module['hide_field'] );
+				if ( 'submit' !== $type && ( $is_horizontal || $mobile_name || empty( $module['hide_field'] ) ) ) {
+					echo '<div class="wpf_item_name' . ( $mobile_name ? ' wpf_mobile_name' : '' ) . '">';
 					echo esc_html( WPF_Utils::get_field_name( $module, $sort_cmb[ $type ] ) );
 					echo '</div>';
 				}
@@ -914,7 +999,19 @@ class WPF_Form {
 			$reset = __( 'Clear', 'wpf' );
 		}
 		$infinitybuffer = ! empty( $template['data']['infinitybuffer'] ) ? $template['data']['infinitybuffer'] : 300;
+		$mobile_layout = isset( $template['data']['mobile_layout'] ) ? $template['data']['mobile_layout'] : 'default';
+		if ( ! in_array( $mobile_layout, array( 'default', 'horizontal', 'sticky' ), true ) ) {
+			$mobile_layout = 'default';
+		}
+		$mobile_bp = ! empty( $template['data']['mobile_breakpoint'] ) ? absint( $template['data']['mobile_breakpoint'] ) : 680;
+		if ( $mobile_bp < 1 ) {
+			$mobile_bp = 680;
+		}
+		$sticky_pos = ( isset( $template['data']['sticky_position'] ) && 'left' === $template['data']['sticky_position'] ) ? 'left' : 'right';
         $clasess = array('wpf_form', 'wpf_form_' . $this->themplate_id);
+		if ( 'sticky' === $mobile_layout ) {
+			$clasess[] = 'wpf_sticky_' . $sticky_pos;
+		}
         if ($scroll) {
             $clasess[] = 'wpf_form_scroll';
         }
@@ -968,7 +1065,14 @@ class WPF_Form {
 			style="visibility: hidden;"
 			data-infinitybuffer="<?php echo esc_attr( $infinitybuffer ); ?>"
 			data-wpf-tax-relation="<?php echo esc_attr( isset( $template['data']['tax_relation'] ) ? $template['data']['tax_relation'] : 'or' ); ?>"
+			<?php if ( ! empty( $template['data']['result_target'] ) ) : ?>data-wpf-target="<?php echo esc_attr( $template['data']['result_target'] ); ?>"<?php endif; ?>
+			<?php if ( 'default' !== $mobile_layout ) : ?>data-wpf-mobile="<?php echo esc_attr( $mobile_layout ); ?>" data-wpf-bp="<?php echo esc_attr( $mobile_bp ); ?>"<?php endif; ?>
+			<?php if ( 'sticky' === $mobile_layout ) : ?>data-wpf-sticky="<?php echo esc_attr( $sticky_pos ); ?>"<?php endif; ?>
 		>
+			<?php if ( 'sticky' === $mobile_layout ) : ?>
+				<button type="button" class="wpf_sticky_btn" aria-expanded="false"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M32 64C14.3 64 0 78.3 0 96s14.3 32 32 32l86.7 0c12.3 28.3 40.5 48 73.3 48s61-19.7 73.3-48L480 128c17.7 0 32-14.3 32-32s-14.3-32-32-32L265.3 64C253 35.7 224.8 16 192 16s-61 19.7-73.3 48L32 64zm0 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l246.7 0c12.3 28.3 40.5 48 73.3 48s61-19.7 73.3-48l54.7 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-54.7 0c-12.3-28.3-40.5-48-73.3-48s-61 19.7-73.3 48L32 224zm0 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l54.7 0c12.3 28.3 40.5 48 73.3 48s61-19.7 73.3-48L480 448c17.7 0 32-14.3 32-32s-14.3-32-32-32l-246.7 0c-12.3-28.3-40.5-48-73.3-48s-61 19.7-73.3 48L32 384z"/></svg><span class="screen-reader-text"><?php esc_html_e( 'Product Filter', 'wpf' ); ?></span></button>
+				<div class="wpf_sticky_panel">
+			<?php endif; ?>
 			<?php if ( WPF_Public::show_edit_link() && $this->themplate_id ) : ?>
 				<div class="wpf_edit_link"><a href="<?php echo esc_url( admin_url( 'admin.php?page=wpf_search#' . $this->themplate_id ) ); ?>"><?php echo wp_kses( __( 'Edit <span>Product Filter</span>', 'wpf' ), array( 'span' => array() ) ); ?></a></div>
 			<?php endif; ?>
@@ -1004,6 +1108,9 @@ class WPF_Form {
 			<div class="wpf-no-products-found" style="display: none;">
 				<p class="woocommerce-info"><?php echo esc_html( $no_found_message ); ?></p>
 			</div>
+			<?php if ( 'sticky' === $mobile_layout ) : ?>
+				</div>
+			<?php endif; ?>
         </form>
         <?php
         $content = ob_get_contents();

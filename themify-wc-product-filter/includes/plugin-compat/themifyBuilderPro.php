@@ -42,12 +42,14 @@ class Themify_WPF_Plugin_Compat_themifyBuilderPro {
 		}
 
 		$wpf_args = self::narrow_taxonomy_archive( $wpf_args );
+		$relation = isset( $form['data']['tax_relation'] ) ? $form['data']['tax_relation'] : 'OR';
+		$wpf_tax  = ( isset( $wpf_args['tax_query'] ) && is_array( $wpf_args['tax_query'] ) ) ? $wpf_args['tax_query'] : array();
+		unset( $wpf_args['tax_query'] );
 
 		if ( is_tax( get_object_taxonomies( 'product' ) ) ) {
 			$archive_term = get_queried_object();
 			if ( isset( $archive_term->taxonomy )
-				&& ! empty( $wpf_args['tax_query'] )
-				&& WPF_Utils::tax_query_has_taxonomy( $wpf_args['tax_query'], $archive_term->taxonomy ) ) {
+				&& WPF_Utils::tax_query_has_taxonomy( $wpf_tax, $archive_term->taxonomy ) ) {
 				if ( 'product_cat' === $archive_term->taxonomy ) {
 					unset( $query_args['product_cat'] );
 				} elseif ( 'product_tag' === $archive_term->taxonomy ) {
@@ -58,6 +60,8 @@ class Themify_WPF_Plugin_Compat_themifyBuilderPro {
 				}
 			}
 		}
+
+		$query_args = WPF_Utils::apply_wpf_tax_relation( $query_args, $wpf_tax, $relation );
 
 		$query_args = array_merge( $query_args, $wpf_args, $preserve );
 		$query_args['tbp_aap']     = true;

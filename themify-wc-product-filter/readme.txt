@@ -3,8 +3,8 @@ Contributors: themifyme
 Plugin Name: Themify - WooCommerce Product Filter
 Tags: product-search, woocommerce-product-search, product-filter, woocommerce-product-filter, product-sort
 Requires at least: 5.0
-Tested up to: 7.1.3
-Stable tag: 1.5.9
+Tested up to: 7.1.5
+Stable tag: 1.6.0
 License: GPL v2
 License URI: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
 
@@ -47,3 +47,8 @@ Please visit plugin's installation guide page: https://themify.me/docs/wc-produc
 == Changelog ==
 
 The changelog is located at: https://themify.org/changelogs/themify-wc-product-filter.txt
+
+== Frequently Asked Questions ==
+= Where do I report security bugs found in this plugin? =
+
+Please report security bugs found in the source code of the Themify – WooCommerce Product Filter plugin through the [Patchstack Vulnerability Disclosure  Program](https://patchstack.com/database/vdp/9e5fb8a4-3452-40d7-aff5-be159d759d8d). The Patchstack team will assist you with verification, CVE assignment, and notify the developers of this plugin.

@@ -45,6 +45,9 @@ class WPF_Public
 	 */
 	private static $silent_parse_query = false;
 
+	/** @var object|null Aggregate min/max row from the price-bounds query. */
+	private $price_bounds_row = null;
+
 	/**
 	 * @param bool $silent
 	 */
@@ -433,6 +436,87 @@ class WPF_Public
 	}
 
 	/**
+	 * The archive term is the page scope. AND it with the shopper's filters
+	 * when the form has no field for that taxonomy, so Taxonomy Logic does not OR it away.
+	 *
+	 * @param array $query_args
+	 * @param array $saved_layout Layout before virtual archive fields are added.
+	 * @return array
+	 */
+	private function pin_archive_taxonomy( array $query_args, array $saved_layout ) {
+		if ( empty( $query_args['tax_query'] ) || ! is_array( $query_args['tax_query'] ) ) {
+			return $query_args;
+		}
+
+		$taxonomy = $this->unscoped_archive_taxonomy( $saved_layout );
+		if ( '' === $taxonomy ) {
+			return $query_args;
+		}
+
+		$relation = isset( $query_args['tax_query']['relation'] ) ? $query_args['tax_query']['relation'] : 'OR';
+		$archive  = array();
+		$filters  = array();
+		foreach ( $query_args['tax_query'] as $key => $clause ) {
+			if ( 'relation' === $key || ! is_array( $clause ) ) {
+				continue;
+			}
+			if ( ! empty( $clause['taxonomy'] ) && $clause['taxonomy'] === $taxonomy ) {
+				$archive[] = $clause;
+			} else {
+				$filters[] = $clause;
+			}
+		}
+		if ( empty( $archive ) || empty( $filters ) ) {
+			return $query_args;
+		}
+
+		$scope = 1 === count( $archive ) ? $archive[0] : array_merge( array( 'relation' => 'AND' ), $archive );
+		$match = 1 === count( $filters ) ? $filters[0] : array_merge( array( 'relation' => $relation ), $filters );
+		$query_args['tax_query'] = array(
+			'relation' => 'AND',
+			$scope,
+			$match,
+		);
+
+		return $query_args;
+	}
+
+	/**
+	 * Taxonomy of the current product archive when the form does not include a field for it.
+	 *
+	 * @param array $saved_layout
+	 * @return string
+	 */
+	private function unscoped_archive_taxonomy( array $saved_layout ) {
+		$taxonomy = '';
+		if ( function_exists( 'is_product_taxonomy' ) && is_product_taxonomy() ) {
+			$term = get_queried_object();
+			if ( isset( $term->taxonomy ) ) {
+				$taxonomy = $term->taxonomy;
+			}
+		}
+		if ( '' === $taxonomy && ! empty( $_REQUEST['wpf_arc_tax'] ) ) {
+			$taxonomy = sanitize_key( wp_unslash( $_REQUEST['wpf_arc_tax'] ) );
+		}
+		if ( '' === $taxonomy || ! taxonomy_exists( $taxonomy ) ) {
+			return '';
+		}
+
+		if ( 'product_cat' === $taxonomy ) {
+			$key = 'wpf_cat';
+		} elseif ( 'product_tag' === $taxonomy ) {
+			$key = 'wpf_tag';
+		} else {
+			$key = $taxonomy;
+		}
+		if ( ! empty( $saved_layout[ $key ] ) ) {
+			return '';
+		}
+
+		return $taxonomy;
+	}
+
+	/**
 	 * @param array  $post
 	 * @param array  $facet_item Layout module for facet type (e.g. wpf_cat).
 	 * @param string $facet_type Lowercase facet key such as `wpf_cat`.
@@ -572,43 +656,44 @@ class WPF_Public
 			return null;
 		}
 
-		unset( $qa['offset'] );
+		unset( $qa['offset'], $qa['meta_key'] );
 
-		$bounds = array();
+		$pargs = wp_parse_args(
+			array(
+				'posts_per_page'   => -1,
+				'paged'            => 1,
+				'fields'           => 'ids',
+				'no_found_rows'    => true,
+				'nopaging'         => true,
+				'orderby'          => 'none',
+				'wc_query'         => '',
+				'wpf_price_bounds' => 1,
+			),
+			$qa
+		);
+		unset( $pargs['offset'], $pargs['meta_key'] );
 
-		remove_filter( 'posts_clauses', array( $this, 'order_by_popularity' ), 10 );
-		remove_filter( 'posts_clauses', array( $this, 'order_by_rating' ), 10 );
-
-		foreach ( array( 'ASC' => 'min', 'DESC' => 'max' ) as $order => $_label ) {
-			$pargs = wp_parse_args(
-				array(
-					'posts_per_page' => 1,
-					'paged' => 1,
-					'fields' => 'ids',
-					'no_found_rows' => true,
-					'orderby' => 'meta_value_num ID',
-					'order' => $order,
-					'meta_key' => '_price',
-				),
-				$qa
-			);
-			$pargs['meta_query'][] = array(
-				'key'     => '_price',
-				'compare' => 'EXISTS',
-			);
-
-			$q = new WP_Query( $pargs );
-			if ( empty( $q->posts[0] ) ) {
-				wp_reset_postdata();
-				return null;
-			}
-			$bounds[ $order ] = (float) get_post_meta( (int) $q->posts[0], '_price', true );
-			wp_reset_postdata();
+		$this->price_bounds_row = null;
+		add_filter( 'posts_clauses', array( $this, 'price_bounds_clauses' ), PHP_INT_MAX, 2 );
+		add_filter( 'posts_clauses_request', array( $this, 'price_bounds_clauses' ), PHP_INT_MAX, 2 );
+		add_filter( 'posts_pre_query', array( $this, 'price_bounds_pre_query' ), PHP_INT_MAX, 2 );
+		try {
+			new WP_Query( $pargs );
+		} finally {
+			remove_filter( 'posts_clauses', array( $this, 'price_bounds_clauses' ), PHP_INT_MAX );
+			remove_filter( 'posts_clauses_request', array( $this, 'price_bounds_clauses' ), PHP_INT_MAX );
+			remove_filter( 'posts_pre_query', array( $this, 'price_bounds_pre_query' ), PHP_INT_MAX );
 		}
 
-		$min_val = isset( $bounds['ASC'] ) ? $bounds['ASC'] : null;
-		$max_val = isset( $bounds['DESC'] ) ? $bounds['DESC'] : null;
-		if ( null === $min_val || null === $max_val || $min_val !== $min_val || $max_val !== $max_val ) {
+		$row = $this->price_bounds_row;
+		$this->price_bounds_row = null;
+		if ( ! is_object( $row ) || ! isset( $row->wpf_min_price, $row->wpf_max_price ) || '' === $row->wpf_min_price || null === $row->wpf_min_price ) {
+			return null;
+		}
+
+		$min_val = (float) $row->wpf_min_price;
+		$max_val = (float) $row->wpf_max_price;
+		if ( $min_val !== $min_val || $max_val !== $max_val || $max_val < $min_val ) {
 			return null;
 		}
 
@@ -617,8 +702,70 @@ class WPF_Public
 		return apply_filters( 'wpf_faceted_price_bounds', $out, $raw_request, $form );
 	}
 
+	/**
+	 * Replace the bounds query with one aggregate min/max over the filtered products.
+	 *
+	 * @param array    $clauses Query clauses.
+	 * @param WP_Query $query   Query.
+	 * @return array
+	 */
+	public function price_bounds_clauses( $clauses, $query ) {
+		if ( ! $query instanceof WP_Query || ! $query->get( 'wpf_price_bounds' ) ) {
+			return $clauses;
+		}
+
+		global $wpdb;
+		$lookup = ! empty( $wpdb->wc_product_meta_lookup ) ? $wpdb->wc_product_meta_lookup : '';
+		$join   = isset( $clauses['join'] ) ? $clauses['join'] : '';
+
+		if ( $lookup && false === strpos( $join, 'wpf_price_lookup' ) && false === strpos( $join, 'wc_product_meta_lookup' ) ) {
+			$join .= " INNER JOIN {$lookup} AS wpf_price_lookup ON {$wpdb->posts}.ID = wpf_price_lookup.product_id ";
+		}
+
+		if ( false !== strpos( $join, 'wpf_price_lookup' ) ) {
+			$alias = 'wpf_price_lookup';
+		} elseif ( $lookup && false !== strpos( $join, 'wc_product_meta_lookup' ) ) {
+			$alias = 'wc_product_meta_lookup';
+		} else {
+			$join .= " INNER JOIN {$wpdb->postmeta} AS wpf_price_mt ON ( {$wpdb->posts}.ID = wpf_price_mt.post_id AND wpf_price_mt.meta_key = '_price' ) ";
+			$clauses['fields'] = 'MIN(CAST(wpf_price_mt.meta_value AS DECIMAL(20,4))) AS wpf_min_price, MAX(CAST(wpf_price_mt.meta_value AS DECIMAL(20,4))) AS wpf_max_price';
+			$clauses['join']    = $join;
+			$clauses['groupby'] = '';
+			$clauses['orderby'] = '';
+			$clauses['limits']  = '';
+			$clauses['distinct'] = '';
+			return $clauses;
+		}
+
+		$clauses['join']     = $join;
+		$clauses['fields']   = "MIN({$alias}.min_price) AS wpf_min_price, MAX({$alias}.max_price) AS wpf_max_price";
+		$clauses['groupby']  = '';
+		$clauses['orderby']  = '';
+		$clauses['limits']   = '';
+		$clauses['distinct'] = '';
+		return $clauses;
+	}
+
+	/**
+	 * Run the aggregate SQL and skip the normal posts query.
+	 *
+	 * @param array|null $posts  Posts, or null to let WP query.
+	 * @param WP_Query   $query  Query.
+	 * @return array|null
+	 */
+	public function price_bounds_pre_query( $posts, $query ) {
+		if ( ! $query instanceof WP_Query || ! $query->get( 'wpf_price_bounds' ) ) {
+			return $posts;
+		}
+
+		global $wpdb;
+		$this->price_bounds_row = ( is_string( $query->request ) && '' !== $query->request ) ? $wpdb->get_row( $query->request ) : null;
+		return array();
+	}
+
 	public function parse_query( array $post, array $form, $build = true ) {
 		$layout = $form['layout'];
+		$saved_layout = $layout;
 		$data = $form['data'];
 		if ( empty( $layout['wpf_cat'] ) && is_product_category() ) {
 			$layout['wpf_cat'] = [ 'logic' => 'in' ];
@@ -769,6 +916,8 @@ class WPF_Public
 			if ( !empty( $query_args['post__not_in'] ) ) {
 				$query_args['post__not_in'] = array_unique( $query_args['post__not_in'] );
 			}
+
+			$query_args = $this->pin_archive_taxonomy( $query_args, $saved_layout );
 		}
 
 		return $build ? $query_args : $args;
@@ -1260,12 +1409,24 @@ class WPF_Public
 					$existing_tax = WPF_Utils::remove_taxonomy_from_tax_query( $existing_tax, $archive_term->taxonomy );
 				}
 			}
-			if ( ! empty( $existing_tax ) ) {
-				if ( ! empty( $args['tax_query'] ) && is_array( $args['tax_query'] ) ) {
-					$args['tax_query'] = WPF_Utils::and_merge_query_clauses( $existing_tax, $args['tax_query'] );
-				} else {
-					unset( $args['tax_query'] );
+			$wpf_tax  = ( isset( $args['tax_query'] ) && is_array( $args['tax_query'] ) ) ? $args['tax_query'] : array();
+			$relation = isset( $form['data']['tax_relation'] ) ? $form['data']['tax_relation'] : 'OR';
+			if ( WPF_Utils::tax_query_clause_count( $wpf_tax ) > 0 ) {
+				$base = array(
+					'tax_query' => $existing_tax,
+				);
+				$post_in = $query->get( 'post__in' );
+				if ( is_array( $post_in ) && count( $post_in ) > 0 ) {
+					$base['post__in'] = $post_in;
 				}
+				$applied = WPF_Utils::apply_wpf_tax_relation( $base, $wpf_tax, $relation );
+				if ( isset( $applied['post__in'] ) ) {
+					$query->set( 'post__in', $applied['post__in'] );
+				}
+				$query->set( 'tax_query', isset( $applied['tax_query'] ) ? $applied['tax_query'] : array() );
+				unset( $args['tax_query'] );
+			} elseif ( ! empty( $existing_tax ) ) {
+				unset( $args['tax_query'] );
 			}
 
 			$existing_meta = $query->get( 'meta_query' );
@@ -1351,6 +1512,9 @@ class WPF_Public
 	}
 
 	function change_shop_query( $query ) {
+		if ( $query->get( 'wpf_price_bounds' ) ) {
+			return;
+		}
 		if ( WPF_Utils::is_wpf_query( $query ) ) {
 			if ( ! empty( $query->get( 'wpf_merged' ) ) ) {
 				return;

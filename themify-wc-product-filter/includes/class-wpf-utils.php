@@ -502,6 +502,184 @@ class WPF_Utils {
 	}
 
 	/**
+	 * Merge a loop's existing taxonomy scope with the active filter.
+	 *
+	 * Catalog exclusions (NOT IN) stay AND. Category, tag, attribute, and
+	 * featured constraints use the filter's taxonomy relation. A sale-style
+	 * post__in is OR'd by id when the relation is OR.
+	 *
+	 * @param array  $query_args Loop query args (tax_query, post__in).
+	 * @param array  $wpf_tax    Filter tax_query.
+	 * @param string $relation   AND or OR.
+	 * @return array
+	 */
+	public static function apply_wpf_tax_relation( array $query_args, $wpf_tax, $relation ) {
+		$relation = ( is_string( $relation ) && 'AND' === strtoupper( $relation ) ) ? 'AND' : 'OR';
+		if ( ! is_array( $wpf_tax ) || self::tax_query_clause_count( $wpf_tax ) < 1 ) {
+			return $query_args;
+		}
+
+		$existing = ( isset( $query_args['tax_query'] ) && is_array( $query_args['tax_query'] ) ) ? $query_args['tax_query'] : array();
+		$raw_in   = ( isset( $query_args['post__in'] ) && is_array( $query_args['post__in'] ) ) ? $query_args['post__in'] : array();
+
+		if ( 'OR' === $relation && count( $raw_in ) > 0 ) {
+			list( $pinned, $scope ) = self::split_pinned_tax_clauses( $existing );
+			if ( count( $scope ) > 0 ) {
+				$module_ids = self::product_ids_for_args(
+					array(
+						'post__in'  => $raw_in,
+						'tax_query' => self::clauses_as_query( $scope, 'AND' ),
+					)
+				);
+			} else {
+				$module_ids = array_values( array_filter( array_map( 'absint', $raw_in ) ) );
+			}
+			$filter_ids = self::product_ids_for_args(
+				array(
+					'tax_query' => $wpf_tax,
+				)
+			);
+			$ids = array_values( array_unique( array_merge( $module_ids, $filter_ids ) ) );
+			$query_args['post__in']  = empty( $ids ) ? array( 0 ) : $ids;
+			$query_args['tax_query'] = self::clauses_as_query( $pinned, 'AND' );
+			return $query_args;
+		}
+
+		$query_args['tax_query'] = self::merge_scoped_tax_query( $existing, $wpf_tax, $relation );
+		return $query_args;
+	}
+
+	/**
+	 * @param array  $existing
+	 * @param array  $incoming
+	 * @param string $relation
+	 * @return array
+	 */
+	public static function merge_scoped_tax_query( $existing, $incoming, $relation ) {
+		$relation = ( is_string( $relation ) && 'AND' === strtoupper( $relation ) ) ? 'AND' : 'OR';
+		list( $pinned, $scope ) = self::split_pinned_tax_clauses( $existing );
+		$incoming_q = self::wrap_query_clauses( $incoming );
+		if ( empty( $incoming_q ) ) {
+			return is_array( $existing ) ? $existing : array();
+		}
+
+		$scope_q = self::clauses_as_query( $scope, 'AND' );
+		if ( 'AND' === $relation || empty( $scope ) ) {
+			$merged = empty( $scope_q ) ? $incoming_q : self::and_merge_query_clauses( $scope_q, $incoming_q );
+		} else {
+			$merged = array(
+				'relation' => 'OR',
+				$scope_q,
+				$incoming_q,
+			);
+		}
+
+		if ( empty( $pinned ) ) {
+			return $merged;
+		}
+
+		return self::and_merge_query_clauses( self::clauses_as_query( $pinned, 'AND' ), $merged );
+	}
+
+	/**
+	 * @param mixed $tax_query
+	 * @return array[]
+	 */
+	private static function split_pinned_tax_clauses( $tax_query ) {
+		$pinned = array();
+		$scope  = array();
+		if ( ! is_array( $tax_query ) ) {
+			return array( $pinned, $scope );
+		}
+		foreach ( $tax_query as $k => $clause ) {
+			if ( 'relation' === $k || ! is_array( $clause ) ) {
+				continue;
+			}
+			if ( self::is_pinned_tax_clause( $clause ) ) {
+				$pinned[] = $clause;
+			} else {
+				$scope[] = $clause;
+			}
+		}
+		return array( $pinned, $scope );
+	}
+
+	/**
+	 * Catalog exclusions stay applied no matter which taxonomy relation is selected.
+	 *
+	 * @param array $clause
+	 * @return bool
+	 */
+	private static function is_pinned_tax_clause( array $clause ) {
+		if ( isset( $clause['operator'] ) && in_array( strtoupper( (string) $clause['operator'] ), array( 'NOT IN', 'NOT EXISTS' ), true ) ) {
+			return true;
+		}
+		if ( ! empty( $clause['taxonomy'] ) ) {
+			return false;
+		}
+		$any = false;
+		foreach ( $clause as $k => $child ) {
+			if ( 'relation' === $k || ! is_array( $child ) ) {
+				continue;
+			}
+			$any = true;
+			if ( ! self::is_pinned_tax_clause( $child ) ) {
+				return false;
+			}
+		}
+		return $any;
+	}
+
+	/**
+	 * @param array  $clauses
+	 * @param string $relation
+	 * @return array
+	 */
+	private static function clauses_as_query( array $clauses, $relation = 'AND' ) {
+		$clauses = array_values( $clauses );
+		if ( count( $clauses ) === 0 ) {
+			return array();
+		}
+		if ( count( $clauses ) === 1 ) {
+			return $clauses[0];
+		}
+		$query = array( 'relation' => ( 'OR' === strtoupper( (string) $relation ) ) ? 'OR' : 'AND' );
+		foreach ( $clauses as $clause ) {
+			$query[] = $clause;
+		}
+		return $query;
+	}
+
+	/**
+	 * @param array $args
+	 * @return int[]
+	 */
+	private static function product_ids_for_args( array $args ) {
+		$query = array(
+			'post_type'              => 'product',
+			'post_status'            => 'publish',
+			'fields'                 => 'ids',
+			'posts_per_page'         => -1,
+			'no_found_rows'          => true,
+			'update_post_meta_cache' => false,
+			'update_post_term_cache' => false,
+			'ignore_sticky_posts'    => true,
+			'wpf_merged'             => 1,
+		);
+		if ( ! empty( $args['post__in'] ) && is_array( $args['post__in'] ) ) {
+			$query['post__in'] = array_map( 'absint', $args['post__in'] );
+			if ( empty( array_filter( $query['post__in'] ) ) ) {
+				return array();
+			}
+		}
+		if ( ! empty( $args['tax_query'] ) && is_array( $args['tax_query'] ) && self::tax_query_clause_count( $args['tax_query'] ) > 0 ) {
+			$query['tax_query'] = $args['tax_query'];
+		}
+		$ids = get_posts( $query );
+		return array_map( 'absint', is_array( $ids ) ? $ids : array() );
+	}
+
+	/**
 	 * @param mixed $clauses
 	 * @return array
 	 */
@@ -592,7 +770,7 @@ class WPF_Utils {
 	 * @param array $tax_query
 	 * @return int
 	 */
-	private static function tax_query_clause_count( $tax_query ) {
+	public static function tax_query_clause_count( $tax_query ) {
 		if ( ! is_array( $tax_query ) ) {
 			return 0;
 		}
